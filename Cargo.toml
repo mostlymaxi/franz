@@ -2,6 +2,16 @@
 name = "franz"
 version = "0.1.0"
 edition = "2021"
+authors = ["Maxi Saparov <max.saparov@gmail.com>"]
+description = "[WIP] a small, friendly, simple alternative to Apache Kafka"
+documentation = "https://docs.rs/franz"
+homepage = "https://github.com/MostlyMax/franz"
+repository = "https://github.com/MostlyMax/franz"
+readme = "README.md"
+keywords = ["ringbuffer", "queue", "kafka"]
+license = "MIT"
+categories = ["ringbuffer"]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 disk-ringbuffer = "0.1.0"

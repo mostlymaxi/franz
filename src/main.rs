@@ -1,4 +1,5 @@
 mod server;
+mod temp;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -26,6 +27,7 @@ struct Args {
 async fn main() {
     env_logger::init();
     let args = Args::parse();
+
     let server = server::FranzServer::new(&args.path, args.max_pages);
     server.run().await;
 }

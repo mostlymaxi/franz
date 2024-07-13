@@ -1,3 +1,4 @@
+use crate::protocol;
 use disk_ringbuffer::ringbuf;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};

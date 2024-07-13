@@ -1,0 +1,15 @@
+[package]
+name = "franz_macros"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "franz_macros"
+path = "src/lib.rs"
+proc-macro = true
+
+[dependencies]
+franz_core = { path = "../franz-core" }
+proc-macro2 = "1.0.86"
+quote = "1.0.36"
+syn = { version = "2.0.70", features = ["extra-traits"] }

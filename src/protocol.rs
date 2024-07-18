@@ -12,7 +12,7 @@ use tokio_util::{
     codec::{Decoder, Encoder, Framed},
 };
 
-mod header_v2 {
+pub mod header_v2 {
     use franz_macros::Decode;
     use franz_macros::Encode;
     use tokio_util::bytes::BytesMut;
@@ -31,7 +31,7 @@ mod header_v2 {
     }
 }
 
-mod produce_v0 {
+pub mod produce_v0 {
     use franz_macros::Decode;
     use franz_macros::Encode;
     use tokio_util::bytes::BytesMut;
@@ -57,7 +57,7 @@ mod produce_v0 {
     }
 }
 
-mod fetch_v0 {
+pub mod fetch_v0 {
     use franz_macros::Decode;
     use franz_macros::Encode;
     use tokio_util::bytes::BytesMut;
@@ -84,7 +84,15 @@ mod fetch_v0 {
     }
 }
 
-mod metadata_v0 {
+// broker - sever ip address and port (only thing we need to store)
+// topics - list of disk-ringbuf folders (search through topics folder)
+// partitions - sub folders: list of disk-ringbufs (maybe in the future search through partitions
+// folder)
+//
+// topic: /var/franz/topics/topic1
+// partitions: /var/franz/topic1/part?/?.bin
+
+pub mod metadata_v0 {
     use franz_macros::Decode;
     use franz_macros::Encode;
     use tokio_util::bytes::BytesMut;
@@ -147,7 +155,7 @@ mod metadata_v0 {
     }
 }
 
-mod list_offset_v0 {
+pub mod list_offset_v0 {
     use franz_macros::Decode;
     use franz_macros::Encode;
     use tokio_util::bytes::BytesMut;
@@ -172,23 +180,38 @@ mod list_offset_v0 {
     }
 }
 
+pub mod offset_commit_v0 {
+    pub struct OffsetCommitRequest {
+        pub group_id: String,
+        pub topics: Vec<Topic>,
+    }
+
+    pub struct Topic {
+        pub name: String,
+        pub partitions: Vec<Partition>,
+    }
+
+    pub struct Partition {
+        partition_index: i32,
+        commited_offset: i64,
+        commited_metadata: Option<String>,
+    }
+}
+
 #[derive(Debug)]
-enum KafkaApiRequests {
+pub enum KafkaApiRequests {
     ProduceRequest(produce_v0::ProduceRequest),
     ListOffsetsRequest(list_offset_v0::ListOffsetsRequest),
     MetadataRequest(metadata_v0::MetadataRequest),
 }
 
 #[derive(Debug, Encode)]
-enum KafkaApiResponse {
+pub enum KafkaApiResponse {
     MetadataResponse(metadata_v0::MetadataResponse),
 }
 
 #[derive(Debug)]
-struct KafkaApiConnection {
-    correlation_id: Option<i32>,
-    request_api_version: Option<i16>,
-}
+pub struct KafkaApiConnection;
 
 impl Decoder for KafkaApiConnection {
     type Item = (i32, KafkaApiRequests);
@@ -245,11 +268,8 @@ impl Encoder<KafkaApiResponse> for KafkaApiConnection {
     }
 }
 
-async fn handle_client(stream: TcpStream) {
-    let decoder = KafkaApiConnection {
-        request_api_version: None,
-        correlation_id: None,
-    };
+pub async fn handle_client(stream: TcpStream) {
+    let decoder = KafkaApiConnection {};
 
     let mut f = Framed::new(stream, decoder);
 

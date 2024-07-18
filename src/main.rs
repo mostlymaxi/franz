@@ -1,3 +1,4 @@
+mod client;
 mod protocol;
 mod server;
 use clap::Parser;

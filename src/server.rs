@@ -1,28 +1,60 @@
 use crate::protocol;
 use disk_ringbuffer::ringbuf;
+use memmap2::MmapMut;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
-use std::time::Duration;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::{select, signal};
 
+// mmap -> cast to struct
+// doing that in rust sucks ^
+// ptr = mmap(file);
+//
+// struct = (struct*) ptr
+//
+// atomic_fetch_inc(struct->idx, 1);
+//
+
+#[repr(C)]
+struct ConsumerState {
+    idx: AtomicUsize,
+    consumers: [Consumer; 1024],
+}
+
+#[repr(C)]
+struct Consumer {
+    last_idx: usize,
+    id: usize,
+}
+
 #[derive(Clone)]
 pub struct FranzServer {
-    addr_producer: SocketAddr,
-    addr_consumer: SocketAddr,
+    broker: BrokerInfo,
     ghost_rx: ringbuf::Reader,
     ghost_tx: ringbuf::Writer,
     stop_rx: watch::Receiver<()>,
 }
 
+// on produce req:
+//    match tx {
+//        None => self.tx = Some(new writer),
+//        Some(tx) => just write bro
+//    }
+
+#[derive(Clone)]
+pub struct BrokerInfo {
+    node_id: usize,
+    host: SocketAddr,
+}
+
 impl FranzServer {
     pub const DEFAULT_MAX_PAGES: usize = 0;
-    pub const DEFAULT_PRODUCER_PORT: u16 = 8084;
-    pub const DEFAULT_CONSUMER_PORT: u16 = 8085;
+    pub const DEFAULT_PORT: u16 = 8084;
     pub const DEFAULT_IPV4: (u8, u8, u8, u8) = (127, 0, 0, 1);
 
     pub fn new(path: &Path, max_pages: usize) -> FranzServer {
@@ -39,26 +71,20 @@ impl FranzServer {
 
         let (a, b, c, d) = Self::DEFAULT_IPV4;
 
-        let addr_producer = SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(a, b, c, d)),
-            Self::DEFAULT_PRODUCER_PORT,
-        );
-        let addr_consumer = SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(a, b, c, d)),
-            Self::DEFAULT_CONSUMER_PORT,
-        );
+        let host = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), Self::DEFAULT_PORT);
+
+        let broker = BrokerInfo { node_id: 0, host };
 
         FranzServer {
-            addr_producer,
-            addr_consumer,
+            broker,
             ghost_rx,
             ghost_tx,
             stop_rx,
         }
     }
 
-    async fn producer_client_handler(&self) -> Result<(), io::Error> {
-        let listener = TcpListener::bind(&self.addr_producer).await?;
+    async fn client_handler(&self) -> Result<(), io::Error> {
+        let listener = TcpListener::bind(&self.broker.host).await?;
 
         loop {
             let (socket, addr) = match listener.accept().await {
@@ -71,57 +97,10 @@ impl FranzServer {
 
             log::info!("({}) accepted a producer client", &addr);
 
-            let mut tx = self.ghost_tx.clone();
+            // let mut tx = self.ghost_tx.clone();
 
             tokio::spawn(async move {
-                let stream = tokio::io::BufReader::new(socket);
-                let mut stream_lines = stream.lines();
-                while let Some(line) = stream_lines.next_line().await.unwrap() {
-                    tx.push(line).unwrap();
-                }
-
-                log::info!("({}) disconnected", &addr);
-            });
-        }
-    }
-
-    async fn consumer_client_handler(&self) -> Result<(), io::Error> {
-        let listener = TcpListener::bind(&self.addr_consumer).await?;
-
-        loop {
-            let (mut socket, addr) = match listener.accept().await {
-                Ok((s, a)) => (s, a),
-                Err(e) => {
-                    log::error!("failed to accept connection: {:?}", e);
-                    continue;
-                }
-            };
-
-            log::info!("({}) accepted a consumer client", &addr);
-
-            let rx = self.ghost_rx.clone();
-
-            tokio::spawn(async move {
-                // can make BufWriter if needed
-                for msg in rx {
-                    match msg {
-                        Err(e) => {
-                            log::error!("{e}");
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                        }
-                        Ok(None) => {
-                            // eventually get rid of this and just wait for consumer to poll
-                            tokio::time::sleep(Duration::from_millis(1)).await;
-                        }
-                        Ok(Some(msg)) => {
-                            log::trace!("{msg}");
-                            socket.write_all(msg.as_bytes()).await.unwrap();
-                            socket.write(&[b'\n']).await.unwrap();
-                        }
-                    }
-                }
-
-                log::info!("({}) disconnected", &addr);
+                protocol::handle_client(socket).await;
             });
         }
     }
@@ -143,12 +122,47 @@ impl FranzServer {
         let consumer_task = tokio::spawn(async move {
             select! {
                 _ = stop_rx_clone.changed() => {},
-                _ = self_clone.consumer_client_handler() => {}
+                _ = self_clone.producer_client_handler() => {}
             }
         });
 
         log::info!("queue server ready");
         producer_task.await.unwrap();
         consumer_task.await.unwrap();
+    }
+}
+// struct ConsumerState {
+//     idx: usize,
+//     consumers: [Consumer; 1024],
+// }
+
+#[test]
+fn test_mmap() {
+    let f = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open("test")
+        .unwrap();
+
+    f.set_len(std::mem::size_of::<ConsumerState>() as u64)
+        .unwrap();
+
+    let consumer_state = unsafe {
+        let m = memmap2::MmapMut::map_mut(&f).unwrap();
+        let m = Box::new(m);
+        let m: &'static MmapMut = Box::leak(m);
+
+        let consumer_state: &mut ConsumerState = std::mem::transmute(m.as_ptr());
+
+        consumer_state
+    };
+
+    consumer_state.idx += 1;
+
+    unsafe {
+        let map: *mut MmapMut = std::mem::transmute(consumer_state);
+        drop(map);
     }
 }

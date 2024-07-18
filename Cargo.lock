@@ -314,6 +314,7 @@ dependencies = [
  "franz_macros",
  "futures",
  "log",
+ "memmap2",
  "serde",
  "tokio",
  "tokio-stream",

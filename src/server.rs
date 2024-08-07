@@ -18,6 +18,17 @@ pub struct FranzServer {
     stop_rx: watch::Receiver<()>,
 }
 
+// 1. increment number of messages atomically
+// 2. atomic fetch number of receivers in queue
+//  - if 0 => pass
+//  - if > 0 => {
+//      - try lock linked list?
+//      - if no work just fucking keep writing bro
+//      - for each receiver {
+//          - lock + wake???
+//      }
+//  }
+
 impl FranzServer {
     pub const DEFAULT_MAX_PAGES: usize = 0;
     pub const DEFAULT_PRODUCER_PORT: u16 = 8084;

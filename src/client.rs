@@ -17,9 +17,7 @@ pub struct FranzClient<'a> {
 }
 
 impl<'a> FranzClient<'a> {
-    pub fn new(server: &FranzServer, stream: TcpStream) -> FranzClient {
-        let server = Arc::new(server);
-
+    pub fn new(server: Arc<&'a FranzServer>, stream: TcpStream) -> FranzClient {
         FranzClient {
             server,
             stream,
@@ -28,9 +26,9 @@ impl<'a> FranzClient<'a> {
         }
     }
 
-    pub async fn handle_client(stream: TcpStream) {
+    pub async fn run(&self) {
         let decoder = KafkaApiConnection;
-        let mut f = Framed::new(stream, decoder);
+        let mut f = Framed::new(self.stream, decoder);
 
         while let Some(msg) = f.next().await {
             match msg {
@@ -47,7 +45,18 @@ impl<'a> FranzClient<'a> {
                         .await
                         .unwrap();
                 }
-                Ok((id, KafkaApiRequests::ProduceRequest(req))) => log::trace!("{id} {:#?}", req),
+                Ok((id, KafkaApiRequests::ProduceRequest(req))) => {
+                    match self.tx {
+                        Some(tx) => tx.push("test").unwrap(),
+                        None => {
+                            let tx = self.server.get_producer();
+                            self.tx = Some(tx);
+
+                            tx.push("test").unwrap()
+                        }
+                    };
+                    log::trace!("{id} {:#?}", req);
+                }
                 Ok((id, KafkaApiRequests::ListOffsetsRequest(req))) => {
                     // self.server.get_offsets();
                     log::trace!("{id} {:#?}", req)

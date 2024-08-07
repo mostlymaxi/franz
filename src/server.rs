@@ -1,5 +1,6 @@
+use crate::client::FranzClient;
 use crate::protocol;
-use disk_ringbuffer::ringbuf;
+use disk_ringbuffer::ringbuf::{self, Writer};
 use memmap2::MmapMut;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -83,8 +84,17 @@ impl FranzServer {
         }
     }
 
+    pub fn get_producer(&self) -> Writer {
+        self.ghost_tx.clone()
+    }
+
+    pub fn get_consumer(&self) -> Reader {
+        self.ghost_rx.clone()
+    }
+
     async fn client_handler(&self) -> Result<(), io::Error> {
         let listener = TcpListener::bind(&self.broker.host).await?;
+        let server = Arc::new(self);
 
         loop {
             let (socket, addr) = match listener.accept().await {
@@ -97,9 +107,12 @@ impl FranzServer {
 
             log::info!("({}) accepted a producer client", &addr);
 
+            let client = FranzClient::new(server.clone(), socket);
+
             // let mut tx = self.ghost_tx.clone();
 
             tokio::spawn(async move {
+                client.handle_client(socket);
                 protocol::handle_client(socket).await;
             });
         }
@@ -113,7 +126,7 @@ impl FranzServer {
         let producer_task = tokio::spawn(async move {
             select! {
                 _ = stop_rx_clone.changed() => {},
-                _ = self_clone.producer_client_handler() => {}
+                _ = self_clone.client_handler() => {}
             }
         });
 
@@ -122,7 +135,7 @@ impl FranzServer {
         let consumer_task = tokio::spawn(async move {
             select! {
                 _ = stop_rx_clone.changed() => {},
-                _ = self_clone.producer_client_handler() => {}
+                _ = self_clone.client_handler() => {}
             }
         });
 

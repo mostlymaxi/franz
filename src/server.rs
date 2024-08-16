@@ -13,16 +13,30 @@ use tokio::{select, signal};
 pub struct FranzServer {
     addr_producer: SocketAddr,
     addr_consumer: SocketAddr,
+    // recv_stack: Arc<RwLock<Stack<Semaphore>>
+    // Receivers are woken up LIFO
     ghost_rx: ringbuf::Reader,
     ghost_tx: ringbuf::Writer,
     stop_rx: watch::Receiver<()>,
 }
 
+// loop {
+//      std::hint::spin_loop();
+// }
+//
+// 4 cores - 5 threads
+//
+//
+// tells thread scheduler i'm not doing
+// anything important at this moment
+//
+//
+
 // 1. increment number of messages atomically
 // 2. atomic fetch number of receivers in queue
 //  - if 0 => pass
 //  - if > 0 => {
-//      - try lock linked list?
+//      - try lock stack?
 //      - if no work just fucking keep writing bro
 //      - for each receiver {
 //          - lock + wake???

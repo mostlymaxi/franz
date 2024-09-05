@@ -93,25 +93,29 @@ impl FranzServer {
         });
     }
 
-    async fn handle_consume(&self, sock: TcpStream, addr: SocketAddr, topic: String) {
+    async fn handle_consume(&self, mut sock: TcpStream, addr: SocketAddr, topic: String) {
         let (_, rx) = self.get_or_create_topic(topic).await;
 
-        let mut stream = BufWriter::new(sock);
         tokio::spawn(async move {
-            // can make BufWriter if needed
+            let mut buf = String::new();
+            let (stream_rdr, stream_wtr) = sock.split();
+            let mut stream_wtr = BufWriter::new(stream_wtr);
+            let mut stream_rdr = BufReader::new(stream_rdr);
+
             for msg in rx {
                 match msg {
-                    Err(e) => {
-                        log::error!("{e}");
-                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    Err(_e) => {
+                        stream_rdr.read_line(&mut buf).await.unwrap();
+                        buf.clear();
                     }
                     Ok(None) => {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        stream_rdr.read_line(&mut buf).await.unwrap();
+                        buf.clear();
                     }
                     Ok(Some(msg)) => {
                         log::trace!("{msg}");
-                        stream.write_all(msg.as_bytes()).await.unwrap();
-                        stream.write_all(&[b'\n']).await.unwrap();
+                        stream_wtr.write_all(msg.as_bytes()).await.unwrap();
+                        stream_wtr.write_all(&[b'\n']).await.unwrap();
                     }
                 }
             }

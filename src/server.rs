@@ -1,34 +1,38 @@
 use disk_ringbuffer::ringbuf;
+use num_derive::FromPrimitive;
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::{select, signal};
 
 #[derive(Clone)]
 pub struct FranzServer {
-    addr_producer: SocketAddr,
-    addr_consumer: SocketAddr,
-    ghost_rx: ringbuf::Reader,
-    ghost_tx: ringbuf::Writer,
+    server_path: PathBuf,
+    sock_addr: SocketAddr,
     stop_rx: watch::Receiver<()>,
+    default_max_pages: usize,
+    topics: Arc<RwLock<HashMap<String, (ringbuf::Writer, ringbuf::Reader)>>>,
+}
+
+#[repr(u8)]
+#[derive(Debug, FromPrimitive)]
+enum ClientKind {
+    Produce = 0,
+    Consume = 1,
+    Info = 2,
 }
 
 impl FranzServer {
-    pub const DEFAULT_MAX_PAGES: usize = 0;
-    pub const DEFAULT_PRODUCER_PORT: u16 = 8084;
-    pub const DEFAULT_CONSUMER_PORT: u16 = 8085;
     pub const DEFAULT_IPV4: (u8, u8, u8, u8) = (127, 0, 0, 1);
 
-    pub fn new(path: &Path, max_pages: usize) -> FranzServer {
-        let (mut ghost_tx, mut ghost_rx) = ringbuf::new(path, max_pages).unwrap();
-        ghost_tx.super_unsafe_page_cleanup_never_call_this_unless_you_know_what_youre_doing();
-        ghost_rx.super_unsafe_page_cleanup_never_call_this_unless_you_know_what_youre_doing();
-
+    pub fn new(server_path: PathBuf, port: u16, default_max_pages: usize) -> FranzServer {
         let (stop_tx, stop_rx) = watch::channel(());
 
         tokio::spawn(async move {
@@ -38,54 +42,86 @@ impl FranzServer {
 
         let (a, b, c, d) = Self::DEFAULT_IPV4;
 
-        let addr_producer = SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(a, b, c, d)),
-            Self::DEFAULT_PRODUCER_PORT,
-        );
-        let addr_consumer = SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::new(a, b, c, d)),
-            Self::DEFAULT_CONSUMER_PORT,
-        );
+        let sock_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), port);
+        let topics = Arc::new(RwLock::new(HashMap::new()));
 
         FranzServer {
-            addr_producer,
-            addr_consumer,
-            ghost_rx,
-            ghost_tx,
+            sock_addr,
+            default_max_pages,
+            server_path,
+            topics,
             stop_rx,
         }
     }
 
-    async fn producer_client_handler(&self) -> Result<(), io::Error> {
-        let listener = TcpListener::bind(&self.addr_producer).await?;
+    async fn get_or_create_topic(&self, topic: String) -> (ringbuf::Writer, ringbuf::Reader) {
+        let topics = self.topics.read().unwrap();
+        match topics.get(&topic) {
+            Some((tx, rx)) => (tx.clone(), rx.clone()),
+            None => {
+                // unlock topics RWLock
+                drop(topics);
 
-        loop {
-            let (socket, addr) = match listener.accept().await {
-                Ok((s, a)) => (s, a),
-                Err(e) => {
-                    log::error!("failed to accept connection: {:?}", e);
-                    continue;
-                }
-            };
+                let (mut tx, mut rx) =
+                    ringbuf::new(self.server_path.join(&topic), self.default_max_pages).unwrap();
 
-            log::info!("({}) accepted a producer client", &addr);
+                tx.super_unsafe_page_cleanup_never_call_this_unless_you_know_what_youre_doing();
+                rx.super_unsafe_page_cleanup_never_call_this_unless_you_know_what_youre_doing();
 
-            let mut tx = self.ghost_tx.clone();
+                let tx_c = tx.clone();
+                let rx_c = rx.clone();
 
-            tokio::spawn(async move {
-                let stream = tokio::io::BufReader::new(socket);
-                let mut stream_lines = stream.lines();
-                while let Some(line) = stream_lines.next_line().await.unwrap() {
-                    tx.push(line).unwrap();
-                }
+                let mut topics = self.topics.write().unwrap();
 
-                log::info!("({}) disconnected", &addr);
-            });
+                topics.insert(topic, (tx, rx));
+                (tx_c, rx_c)
+            }
         }
     }
 
-    async fn consumer_client_handler(&self) -> Result<(), io::Error> {
-        let listener = TcpListener::bind(&self.addr_consumer).await?;
+    async fn handle_produce(&self, sock: TcpStream, addr: SocketAddr, topic: String) {
+        let (mut tx, _) = self.get_or_create_topic(topic).await;
+
+        tokio::spawn(async move {
+            let stream = BufReader::new(sock);
+            let mut stream_lines = stream.lines();
+            while let Some(line) = stream_lines.next_line().await.unwrap() {
+                tx.push(line).unwrap();
+            }
+
+            log::info!("({}) disconnected", &addr);
+        });
+    }
+
+    async fn handle_consume(&self, sock: TcpStream, addr: SocketAddr, topic: String) {
+        let (_, rx) = self.get_or_create_topic(topic).await;
+
+        let mut stream = BufWriter::new(sock);
+        tokio::spawn(async move {
+            // can make BufWriter if needed
+            for msg in rx {
+                match msg {
+                    Err(e) => {
+                        log::error!("{e}");
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                    Ok(Some(msg)) => {
+                        log::trace!("{msg}");
+                        stream.write_all(msg.as_bytes()).await.unwrap();
+                        stream.write_all(&[b'\n']).await.unwrap();
+                    }
+                }
+            }
+
+            log::info!("({}) disconnected", &addr);
+        });
+    }
+
+    async fn client_handler(&self) -> Result<(), io::Error> {
+        let listener = TcpListener::bind(&self.sock_addr).await?;
 
         loop {
             let (mut socket, addr) = match listener.accept().await {
@@ -96,32 +132,34 @@ impl FranzServer {
                 }
             };
 
-            log::info!("({}) accepted a consumer client", &addr);
+            let (sock_rdr, _) = socket.split();
+            let mut sock_rdr = BufReader::new(sock_rdr);
 
-            let rx = self.ghost_rx.clone();
+            log::info!("({}) accepted a producer client", &addr);
 
-            tokio::spawn(async move {
-                // can make BufWriter if needed
-                for msg in rx {
-                    match msg {
-                        Err(e) => {
-                            log::error!("{e}");
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                        }
-                        Ok(None) => {
-                            // eventually get rid of this and just wait for consumer to poll
-                            tokio::time::sleep(Duration::from_millis(1)).await;
-                        }
-                        Ok(Some(msg)) => {
-                            log::trace!("{msg}");
-                            socket.write_all(msg.as_bytes()).await.unwrap();
-                            socket.write(&[b'\n']).await.unwrap();
-                        }
-                    }
-                }
+            // this is the efficient version:
+            //let _msg_length = socket.read_u32().await.unwrap();
+            //let msg_what: MsgWhat =
+            //    num::FromPrimitive::from_u8(socket.read_u8().await.unwrap()).unwrap();
+            //let topic_length = socket.read_u32().await.unwrap();
+            //let mut buf = vec![0; topic_length as usize];
+            //socket.read_exact(&mut buf).await.unwrap();
+            //let topic = String::from_utf8(buf).unwrap();
 
-                log::info!("({}) disconnected", &addr);
-            });
+            let mut client_kind = String::new();
+            sock_rdr.read_line(&mut client_kind).await.unwrap();
+            let client_kind = client_kind.trim().parse::<u8>().unwrap();
+            let client_kind = num::FromPrimitive::from_u8(client_kind).unwrap();
+
+            let mut topic = String::new();
+            sock_rdr.read_line(&mut topic).await.unwrap();
+            let topic = topic.trim().to_string();
+
+            match client_kind {
+                ClientKind::Produce => self.handle_produce(socket, addr, topic).await,
+                ClientKind::Consume => self.handle_consume(socket, addr, topic).await,
+                ClientKind::Info => unreachable!(),
+            }
         }
     }
 
@@ -130,24 +168,17 @@ impl FranzServer {
 
         let mut stop_rx_clone = self.stop_rx.clone();
         let self_clone = self.clone();
-        let producer_task = tokio::spawn(async move {
-            select! {
-                _ = stop_rx_clone.changed() => {},
-                _ = self_clone.producer_client_handler() => {}
-            }
-        });
 
-        let mut stop_rx_clone = self.stop_rx.clone();
-        let self_clone = self.clone();
-        let consumer_task = tokio::spawn(async move {
+        let client_handler = tokio::spawn(async move {
             select! {
                 _ = stop_rx_clone.changed() => {},
-                _ = self_clone.consumer_client_handler() => {}
+                _ = self_clone.client_handler() => {}
             }
         });
 
         log::info!("queue server ready");
-        producer_task.await.unwrap();
-        consumer_task.await.unwrap();
+        client_handler.await.unwrap();
+
+        log::info!("shutting down...")
     }
 }

@@ -5,8 +5,8 @@ edition = "2021"
 authors = ["Maxi Saparov <max.saparov@gmail.com>"]
 description = "[WIP] a small, friendly, simple alternative to Apache Kafka"
 documentation = "https://docs.rs/franz"
-homepage = "https://github.com/MostlyMax/franz"
-repository = "https://github.com/MostlyMax/franz"
+homepage = "https://github.com/MostlyMaxi/franz"
+repository = "https://github.com/MostlyMaxi/franz"
 readme = "README.md"
 keywords = ["ringbuffer", "queue", "kafka"]
 license = "MIT"
@@ -16,10 +16,11 @@ categories = ["ringbuffer"]
 [dependencies]
 clap = { version = "4.5.8", features = ["derive"] }
 ctrlc = { version = "3.4.4", features = ["termination"] }
-disk-ringbuffer = { git = "https://github.com/MostlyMax/disk-ringbuffer.git", branch = "maxi/doing-it-all" }
+disk-ringbuffer = "0.7.3"
 env_logger = "0.11.3"
 log = "0.4.22"
 num = "0.4.3"
 num-derive = "0.4.2"
 num-traits = "0.2.19"
+thiserror = "1.0.63"
 tokio = { version = "1.38.0", features = ["full"] }

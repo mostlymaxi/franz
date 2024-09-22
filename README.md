@@ -1,4 +1,4 @@
-# Franz
+# Franz-with-Benefits
 A simple and friendlier alternative to Apache Kafka
 
 

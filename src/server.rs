@@ -1,7 +1,7 @@
 use disk_ringbuffer::ringbuf::{self, DiskRing};
 use num_derive::FromPrimitive;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
@@ -34,7 +34,7 @@ enum ClientKind {
 }
 
 impl FranzServer {
-    pub const DEFAULT_IPV4: (u8, u8, u8, u8) = (0, 0, 0, 0);
+    // pub const DEFAULT_IPV4: (u8, u8, u8, u8) = (0, 0, 0, 0);
 
     pub fn new(server_path: PathBuf, port: u16, _default_max_pages: usize) -> FranzServer {
         let (stop_tx, stop_rx) = watch::channel(());
@@ -44,9 +44,10 @@ impl FranzServer {
             let _ = stop_tx.send(());
         });
 
-        let (a, b, c, d) = Self::DEFAULT_IPV4;
+        // let (a, b, c, d) = Self::DEFAULT_IPV4;
 
-        let sock_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), port);
+        // let sock_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), port);
+        let sock_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), port);
 
         FranzServer {
             sock_addr,

@@ -34,7 +34,7 @@ enum ClientKind {
 }
 
 impl FranzServer {
-    pub const DEFAULT_IPV4: (u8, u8, u8, u8) = (127, 0, 0, 1);
+    pub const DEFAULT_IPV4: (u8, u8, u8, u8) = (0, 0, 0, 0);
 
     pub fn new(server_path: PathBuf, port: u16, _default_max_pages: usize) -> FranzServer {
         let (stop_tx, stop_rx) = watch::channel(());
@@ -71,6 +71,7 @@ impl FranzServer {
             let stream = BufReader::new(sock);
             let mut stream_lines = stream.lines();
             while let Some(line) = stream_lines.next_line().await? {
+                log::trace!("{line}");
                 tx.push(line)?;
             }
 

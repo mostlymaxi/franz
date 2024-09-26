@@ -140,7 +140,7 @@ impl FranzServer {
 
                         let m = poll.trim();
                         match m {
-                            "POLL\n" => {}
+                            "POLL" => {}
                             _ => break,
                         }
 

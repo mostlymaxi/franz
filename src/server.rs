@@ -82,6 +82,7 @@ impl FranzServer {
         tokio::spawn(async move {
             let stream = BufReader::new(sock);
             let mut stream_lines = stream.lines();
+            // TODO: Select
             while let Some(line) = stream_lines.next_line().await? {
                 log::trace!("{line}");
                 tx.push(line)?;
@@ -114,6 +115,8 @@ impl FranzServer {
             max_qpages
         );
 
+        let stop_rx_clone = self.stop_rx.clone();
+
         tokio::spawn(async move {
             let mut poll = String::new();
             let (sock_rdr, sock_wtr) = sock.split();
@@ -125,6 +128,7 @@ impl FranzServer {
                 match msg? {
                     None => {
                         let _ =
+                            // TODO: Select
                             match timeout(Duration::from_secs(30), sock_rdr.read_line(&mut poll))
                                 .await
                             {
@@ -153,6 +157,10 @@ impl FranzServer {
                         sock_wtr.flush().await?;
                     }
                 }
+
+                if stop_rx_clone.has_changed().unwrap_or(true) {
+                    break;
+                }
             }
 
             log::info!("({}) disconnected", &addr);
@@ -166,6 +174,7 @@ impl FranzServer {
         let listener = TcpListener::bind(&self.sock_addr).await?;
 
         loop {
+            // TODO: Select
             let (mut socket, addr) = match listener.accept().await {
                 Ok((s, a)) => (s, a),
                 Err(e) => {

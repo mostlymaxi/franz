@@ -184,9 +184,9 @@ dependencies = [
 
 [[package]]
 name = "disk-ringbuffer"
-version = "0.7.3"
+version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "314396ae8bf2dc772a2820bfeccfe942ad12fad6f5c2fb09c0680dc35449ed6b"
+checksum = "cf4d0b194d55d5b7bebdede734dbda73cb8a47c3253dbb3b308f8a2f333ea5cf"
 dependencies = [
  "memmap2",
  "mmap-wrapper",

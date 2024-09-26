@@ -1,8 +1,10 @@
 use disk_ringbuffer::ringbuf::{self, DiskRing};
 use num_derive::FromPrimitive;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tokio::time::timeout;
 
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
@@ -14,7 +16,7 @@ pub struct FranzServer {
     server_path: PathBuf,
     sock_addr: SocketAddr,
     stop_rx: watch::Receiver<()>,
-    _default_max_pages: usize,
+    default_max_pages: usize,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -34,9 +36,12 @@ enum ClientKind {
 }
 
 impl FranzServer {
-    pub const DEFAULT_IPV4: (u8, u8, u8, u8) = (0, 0, 0, 0);
-
-    pub fn new(server_path: PathBuf, port: u16, _default_max_pages: usize) -> FranzServer {
+    pub fn new(
+        server_path: PathBuf,
+        bind_ip: IpAddr,
+        port: u16,
+        default_max_pages: usize,
+    ) -> FranzServer {
         let (stop_tx, stop_rx) = watch::channel(());
 
         tokio::spawn(async move {
@@ -44,14 +49,11 @@ impl FranzServer {
             let _ = stop_tx.send(());
         });
 
-        let (a, b, c, d) = Self::DEFAULT_IPV4;
-
-        let sock_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(a, b, c, d)), port);
-        // let sock_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED);
+        let sock_addr = SocketAddr::new(bind_ip, port);
 
         FranzServer {
             sock_addr,
-            _default_max_pages,
+            default_max_pages,
             server_path,
             stop_rx,
         }
@@ -64,9 +66,18 @@ impl FranzServer {
         topic: P,
     ) -> Result<(), FranzError> {
         fs::create_dir_all(self.server_path.join(&topic))?;
-        let mut tx = DiskRing::<ringbuf::Sender>::new(self.server_path.join(topic))?;
+        let mut tx = DiskRing::<ringbuf::Sender>::new(self.server_path.join(&topic))?;
+        let max_qpages = disk_ringbuffer::ringbuf::get_or_update_max_qpage(
+            self.server_path.join(&topic),
+            self.default_max_pages,
+        )?;
 
-        log::info!("({}) accepted producer", &addr);
+        log::info!(
+            "({}) accepted producer for {:?} with {} max qpages",
+            &addr,
+            topic.as_ref(),
+            max_qpages
+        );
 
         tokio::spawn(async move {
             let stream = BufReader::new(sock);
@@ -83,16 +94,25 @@ impl FranzServer {
         Ok(())
     }
 
-    async fn handle_consume(
+    async fn handle_consume<P: AsRef<Path>>(
         &self,
         mut sock: TcpStream,
         addr: SocketAddr,
-        topic: String,
+        topic: P,
     ) -> Result<(), FranzError> {
         fs::create_dir_all(self.server_path.join(&topic))?;
-        let rx = DiskRing::<ringbuf::Receiver>::new(self.server_path.join(topic))?;
+        let rx = DiskRing::<ringbuf::Receiver>::new(self.server_path.join(&topic))?;
+        let max_qpages = disk_ringbuffer::ringbuf::get_or_update_max_qpage(
+            self.server_path.join(&topic),
+            self.default_max_pages,
+        )?;
 
-        log::info!("({}) accepted consumer", &addr);
+        log::info!(
+            "({}) accepted consumer for {:?} with {} max qpages",
+            &addr,
+            topic.as_ref(),
+            max_qpages
+        );
 
         tokio::spawn(async move {
             let mut poll = String::new();
@@ -104,7 +124,26 @@ impl FranzServer {
             for msg in rx {
                 match msg? {
                     None => {
-                        sock_rdr.read_line(&mut poll).await?;
+                        let _ =
+                            match timeout(Duration::from_secs(30), sock_rdr.read_line(&mut poll))
+                                .await
+                            {
+                                Ok(r) => r?,
+                                Err(_) => {
+                                    log::warn!(
+                                        "({}) failed to poll within 30 seconds... disconnecting",
+                                        &addr
+                                    );
+                                    break;
+                                }
+                            };
+
+                        let m = poll.trim();
+                        match m {
+                            "POLL\n" => {}
+                            _ => break,
+                        }
+
                         poll.clear();
                     }
                     Some(msg) => {
@@ -144,20 +183,20 @@ impl FranzServer {
             // "1" => CONSUME
             let mut client_kind = String::new();
             if let Err(e) = sock_rdr.read_line(&mut client_kind).await {
-                log::error!("{e}");
+                log::error!("({}) {e}", &addr);
                 continue;
             }
             let client_kind = match client_kind.trim().parse::<u8>() {
                 Ok(c) => c,
                 Err(e) => {
-                    log::error!("{e}");
+                    log::error!("({}) {e}", &addr);
                     continue;
                 }
             };
             let client_kind = match num::FromPrimitive::from_u8(client_kind) {
                 Some(c) => c,
                 None => {
-                    log::error!("failed to parse client kind {client_kind}");
+                    log::error!("({}) failed to parse client kind {client_kind}", &addr);
                     continue;
                 }
             };
@@ -166,11 +205,10 @@ impl FranzServer {
             // topic_name
             let mut topic = String::new();
             if let Err(e) = sock_rdr.read_line(&mut topic).await {
-                log::error!("{e}");
+                log::error!("({}) {e}", &addr);
                 continue;
             }
             let topic = topic.trim().to_string();
-            // \n
 
             let _ = match client_kind {
                 ClientKind::Produce => self.handle_produce(socket, addr, topic).await,
@@ -181,7 +219,7 @@ impl FranzServer {
     }
 
     pub async fn run(self) {
-        log::debug!("starting queue server...");
+        log::info!("starting queue server...");
 
         let mut stop_rx_clone = self.stop_rx.clone();
         let self_clone = self.clone();
@@ -193,7 +231,7 @@ impl FranzServer {
             }
         });
 
-        log::info!("queue server ready");
+        log::info!("queue server ready!");
         client_handler.await.unwrap();
 
         log::info!("shutting down...")

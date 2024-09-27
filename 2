@@ -116,82 +116,69 @@ impl FranzServer {
             max_qpages
         );
 
+        let (sock_rdr, sock_wtr) = sock.split();
+
         let stop_rx_clone = self.stop_rx.clone();
-        tokio_scoped::scope(|s| {
-            let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(());
-            let (sock_rdr, sock_wtr) = sock.split();
+        tokio::spawn(async move {
+            let mut poll = String::new();
+            let mut sock_rdr = BufReader::new(sock_rdr);
 
-            // KEEPALIVE
-            s.spawn(async move {
-                let mut poll = String::new();
-                let mut sock_rdr = BufReader::new(sock_rdr);
+            loop {
+                match timeout(Duration::from_secs(75), sock_rdr.read_line(&mut poll)).await {
+                    Ok(r) => r,
+                    Err(_) => { log::warn!("({}) failed to poll within 75 seconds... disconnecting" , &addr); 
+                    return 
+                    },
+            }
 
-                loop {
-                    match timeout(Duration::from_secs(75), sock_rdr.read_line(&mut poll)).await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            log::warn!(
-                                "({}) failed to PING within 75 seconds... disconnecting",
-                                &addr
-                            );
-                            break;
-                        }
-                    }
 
-                    match poll.trim() {
-                        "PING" => {}
-                        _ => break,
-                    }
+            }
+                        Ok(())
+        });
 
-                    poll.clear();
-                }
+        tokio::spawn(async move {
+            let mut sock_wtr = BufWriter::new(sock_wtr);
 
-                let _ = timeout_tx.send(());
-            });
-
-            s.spawn(async move {
-                let mut sock_wtr = BufWriter::new(sock_wtr);
-
-                // can make BufWriter if needed
-                for msg in rx {
-                    match msg {
-                        Err(_) => break,
-                        Ok(None) => {
-                            // TODO: SERVER SIDE POLLING
-                            // hey server, any new messages bub??
-                            // yep! here's 1000 new messages
-                            // nope D:
-                            //
-                            // TODO:
-                            // INSTEAD
-                            // a single thread that polls for new messages
-                            // on new messages wake other threads
-                        }
-                        Ok(Some(msg)) => {
-                            log::trace!("{msg}");
-                            if sock_wtr.write_all(msg.as_bytes()).await.is_err() {
-                                break;
+            // can make BufWriter if needed
+            for msg in rx {
+                match msg? {
+                    None => {
+                        let _ =
+                            // TODO: Select
+                            {
+                                Ok(r) => r?,
+                                Err(_) => {
+                                    log::warn!(
+                                        "({}) failed to poll within 30 seconds... disconnecting",
+                                        &addr
+                                    );
+                                    break;
+                                }
                             };
-                            if sock_wtr.write_all(&[b'\n']).await.is_err() {
-                                break;
-                            };
-                            if sock_wtr.flush().await.is_err() {
-                                break;
-                            };
+
+                        let m = poll.trim();
+                        match m {
+                            "POLL" => {}
+                            _ => break,
                         }
-                    }
 
-                    if stop_rx_clone.has_changed().unwrap_or(true) {
-                        break;
+                        poll.clear();
                     }
-
-                    if timeout_rx.has_changed().unwrap_or(true) {
-                        break;
+                    Some(msg) => {
+                        log::trace!("{msg}");
+                        sock_wtr.write_all(msg.as_bytes()).await?;
+                        sock_wtr.write_all(&[b'\n']).await?;
+                        sock_wtr.flush().await?;
                     }
                 }
 
-                log::info!("({}) disconnected", &addr);
-            });
+                if stop_rx_clone.has_changed().unwrap_or(true) {
+                    break;
+                }
+            }
+
+            log::info!("({}) disconnected", &addr);
+            Ok::<(), FranzError>(())
         });
 
         Ok(())

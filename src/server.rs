@@ -35,6 +35,7 @@ enum ClientKind {
     Info = 2,
 }
 
+// TODO: tracing instead of logging
 impl FranzServer {
     pub fn new(
         server_path: PathBuf,
@@ -119,6 +120,7 @@ impl FranzServer {
         let stop_rx_clone = self.stop_rx.clone();
         tokio_scoped::scope(|s| {
             let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(());
+            // TODO: change split into into_split and get rid of tokio scoped
             let (sock_rdr, sock_wtr) = sock.split();
 
             // KEEPALIVE
@@ -157,6 +159,7 @@ impl FranzServer {
                     match msg {
                         Err(_) => break,
                         Ok(None) => {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
                             // TODO: SERVER SIDE POLLING
                             // hey server, any new messages bub??
                             // yep! here's 1000 new messages

@@ -99,7 +99,7 @@ impl FranzServer {
 
     async fn handle_consume<P: AsRef<Path>>(
         &self,
-        mut sock: TcpStream,
+        sock: TcpStream,
         addr: SocketAddr,
         topic: P,
     ) -> Result<(), FranzError> {

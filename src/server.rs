@@ -118,83 +118,80 @@ impl FranzServer {
         );
 
         let stop_rx_clone = self.stop_rx.clone();
-        tokio_scoped::scope(|s| {
-            let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(());
-            // TODO: change split into into_split and get rid of tokio scoped
-            let (sock_rdr, sock_wtr) = sock.split();
+        let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(());
+        let (sock_rdr, sock_wtr) = sock.into_split();
 
-            // KEEPALIVE
-            s.spawn(async move {
-                let mut poll = String::new();
-                let mut sock_rdr = BufReader::new(sock_rdr);
+        // KEEPALIVE
+        tokio::spawn(async move {
+            let mut poll = String::new();
+            let mut sock_rdr = BufReader::new(sock_rdr);
 
-                loop {
-                    match timeout(Duration::from_secs(75), sock_rdr.read_line(&mut poll)).await {
-                        Ok(_) => {}
-                        Err(_) => {
-                            log::warn!(
-                                "({}) failed to PING within 75 seconds... disconnecting",
-                                &addr
-                            );
+            loop {
+                match timeout(Duration::from_secs(75), sock_rdr.read_line(&mut poll)).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        log::warn!(
+                            "({}) failed to PING within 75 seconds... disconnecting",
+                            &addr
+                        );
+                        break;
+                    }
+                }
+
+                match poll.trim() {
+                    "PING" => {}
+                    _ => break,
+                }
+
+                poll.clear();
+            }
+
+            let _ = timeout_tx.send(());
+        });
+
+        tokio::spawn(async move {
+            let mut sock_wtr = BufWriter::new(sock_wtr);
+
+            // can make BufWriter if needed
+            for msg in rx {
+                match msg {
+                    Err(_) => break,
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        // TODO: SERVER SIDE POLLING
+                        // hey server, any new messages bub??
+                        // yep! here's 1000 new messages
+                        // nope D:
+                        //
+                        // TODO:
+                        // INSTEAD
+                        // a single thread that polls for new messages
+                        // on new messages wake other threads
+                    }
+                    Ok(Some(msg)) => {
+                        log::trace!("{msg}");
+                        if sock_wtr.write_all(msg.as_bytes()).await.is_err() {
                             break;
-                        }
-                    }
-
-                    match poll.trim() {
-                        "PING" => {}
-                        _ => break,
-                    }
-
-                    poll.clear();
-                }
-
-                let _ = timeout_tx.send(());
-            });
-
-            s.spawn(async move {
-                let mut sock_wtr = BufWriter::new(sock_wtr);
-
-                // can make BufWriter if needed
-                for msg in rx {
-                    match msg {
-                        Err(_) => break,
-                        Ok(None) => {
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            // TODO: SERVER SIDE POLLING
-                            // hey server, any new messages bub??
-                            // yep! here's 1000 new messages
-                            // nope D:
-                            //
-                            // TODO:
-                            // INSTEAD
-                            // a single thread that polls for new messages
-                            // on new messages wake other threads
-                        }
-                        Ok(Some(msg)) => {
-                            log::trace!("{msg}");
-                            if sock_wtr.write_all(msg.as_bytes()).await.is_err() {
-                                break;
-                            };
-                            if sock_wtr.write_all(&[b'\n']).await.is_err() {
-                                break;
-                            };
-                            if sock_wtr.flush().await.is_err() {
-                                break;
-                            };
-                        }
-                    }
-
-                    if stop_rx_clone.has_changed().unwrap_or(true) {
-                        break;
-                    }
-
-                    if timeout_rx.has_changed().unwrap_or(true) {
-                        break;
+                        };
+                        if sock_wtr.write_all(&[b'\n']).await.is_err() {
+                            break;
+                        };
+                        if sock_wtr.flush().await.is_err() {
+                            break;
+                        };
                     }
                 }
 
-                log::info!("({}) disconnected", &addr);
-            });
+                if stop_rx_clone.has_changed().unwrap_or(true) {
+                    break;
+                }
+
+                if timeout_rx.has_changed().unwrap_or(true) {
+                    break;
+                }
+            }
+
+            log::info!("({}) disconnected", &addr);
         });
 
         Ok(())

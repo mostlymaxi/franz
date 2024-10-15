@@ -179,9 +179,9 @@ dependencies = [
 
 [[package]]
 name = "disk-mpmc"
-version = "0.1.1"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cf9165602a21e7fb222cdb1079a9426a20e7c23f84f313c6b30f83a040af3df"
+checksum = "c8123ad4a4e0225c0d0e23588712b6c210fa741c278f4aec730835e9d3388f33"
 dependencies = [
  "atomic-wait",
  "mmapcell",

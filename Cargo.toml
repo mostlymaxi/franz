@@ -15,7 +15,7 @@ license = "MIT"
 [dependencies]
 clap = { version = "4.5.8", features = ["derive"] }
 ctrlc = { version = "3.4.4", features = ["termination"] }
-disk-mpmc = "0.1.1"
+disk-mpmc = "0.2.1"
 num = "0.4.3"
 num-derive = "0.4.2"
 num-traits = "0.2.19"

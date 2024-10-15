@@ -76,7 +76,7 @@ impl FranzServer {
             }
         };
 
-        let tx = Sender::new(dp_man.clone())?;
+        let mut tx = Sender::new(dp_man.clone())?;
         let twitter_c = self.twitter.clone();
 
         self.tracker.spawn(async move {
@@ -104,7 +104,7 @@ impl FranzServer {
     // TODO: renamed and clean up
     async fn push_messages(
         sock: OwnedWriteHalf,
-        rx: Receiver<Grouped>,
+        mut rx: Receiver<Grouped>,
     ) -> Result<(), std::io::Error> {
         let mut sock_wtr = BufWriter::new(sock);
 
@@ -113,7 +113,7 @@ impl FranzServer {
         // AND doesn't pop a message
         // ^^^ easy to implement
         loop {
-            let msg = tokio::task::block_in_place(|| rx.pop())?;
+            let msg = tokio::task::spawn_blocking(|| rx.pop()).await?.unwrap();
             sock_wtr.write_all(msg).await?;
             sock_wtr.write_all(b"\n").await?;
             sock_wtr.flush().await?;

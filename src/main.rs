@@ -8,7 +8,7 @@ use std::{
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long)]
+    #[arg(short, long)] // default_value_t = PathBuf::from("/var/lib/fran"))]
     path: PathBuf,
     #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
     bind_ip: IpAddr,
@@ -20,8 +20,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    tracing_subscriber::fmt::init();
     let args = Args::parse();
-    let server = server::FranzServer::new(args.path, args.bind_ip, args.port, args.max_pages);
+    let server = server::FranzServer::new(args.path, args.bind_ip, args.port);
     server.run().await;
 }

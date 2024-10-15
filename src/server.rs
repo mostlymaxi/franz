@@ -2,26 +2,31 @@ use disk_mpmc::manager::DataPagesManager;
 use disk_mpmc::{Grouped, Receiver, Sender};
 use num_derive::FromPrimitive;
 use std::collections::HashMap;
-use std::fs;
-use std::net::{IpAddr, SocketAddr};
+use std::io::{BufRead, BufReader, BufWriter, Lines, Write};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::tcp::OwnedWriteHalf;
-use tokio::time::timeout;
-use tokio_util::sync::CancellationToken;
-use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, instrument, trace, warn};
+use std::{fs, thread};
 
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::{select, signal};
+use tracing::{debug, error, info, instrument, trace, warn};
+//
+//use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+//use tokio::net::tcp::OwnedWriteHalf;
+//use tokio::net::{TcpListener, TcpStream};
+//use tokio::task::yield_now;
+//use tokio::time::timeout;
+//use tokio::{select, signal};
+//use tokio_util::sync::CancellationToken;
+//use tokio_util::task::TaskTracker;
 
 pub struct FranzServer {
     server_path: PathBuf,
     topics: HashMap<PathBuf, DataPagesManager>,
     sock_addr: SocketAddr,
-    twitter: CancellationToken,
-    tracker: TaskTracker, // default_max_pages: usize,
+    //twitter: CancellationToken,
+    //tracker: TaskTracker, // default_max_pages: usize,
 }
 
 #[repr(u8)]
@@ -37,27 +42,27 @@ impl FranzServer {
     pub fn new(server_path: PathBuf, bind_ip: IpAddr, port: u16) -> FranzServer {
         let sock_addr = SocketAddr::new(bind_ip, port);
         let topics = HashMap::new();
-        let tracker = TaskTracker::new();
-        let twitter = CancellationToken::new();
+        //let tracker = TaskTracker::new();
+        //let twitter = CancellationToken::new();
 
-        let twitter_c = twitter.clone();
-
-        tokio::spawn(async move {
-            let _ = signal::ctrl_c().await;
-            twitter_c.cancel();
-        });
+        //let twitter_c = twitter.clone();
+        //
+        //tokio::spawn(async move {
+        //    let _ = signal::ctrl_c().await;
+        //    twitter_c.cancel();
+        //});
 
         FranzServer {
             sock_addr,
             topics,
             server_path,
-            tracker,
-            twitter,
+            //tracker,
+            //twitter,
         }
     }
 
     #[instrument(err, skip(self, topic), fields(topic = %topic.as_ref().display()))]
-    async fn handle_produce<P: AsRef<Path>>(
+    fn handle_produce<P: AsRef<Path>>(
         &mut self,
         sock: TcpStream,
         topic: P,
@@ -77,18 +82,13 @@ impl FranzServer {
         };
 
         let mut tx = Sender::new(dp_man.clone())?;
-        let twitter_c = self.twitter.clone();
-
-        self.tracker.spawn(async move {
+        std::thread::spawn(move || {
             let stream = BufReader::new(sock);
             let mut stream_lines = stream.lines();
 
-            while let Some(line) = select! {
-                biased;
+            while let Some(line) = stream_lines.next() {
+                let line = line?;
 
-                _ = twitter_c.cancelled() => Ok(None),
-                line = stream_lines.next_line() => line,
-            }? {
                 trace!(%line);
                 tx.push(line)?;
             }
@@ -101,30 +101,51 @@ impl FranzServer {
         Ok(())
     }
 
-    // TODO: renamed and clean up
-    async fn push_messages(
-        sock: OwnedWriteHalf,
-        mut rx: Receiver<Grouped>,
-    ) -> Result<(), std::io::Error> {
+    fn push_messages(sock: TcpStream, mut rx: Receiver<Grouped>) -> Result<(), std::io::Error> {
         let mut sock_wtr = BufWriter::new(sock);
 
-        // epoll struct
-        // sync / send safe
-        // AND doesn't pop a message
-        // ^^^ easy to implement
         loop {
-            let msg = tokio::task::spawn_blocking(|| rx.pop()).await?.unwrap();
-            sock_wtr.write_all(msg).await?;
-            sock_wtr.write_all(b"\n").await?;
-            sock_wtr.flush().await?;
+            let msg = rx.pop()?;
+            sock_wtr.write_all(msg)?;
+            sock_wtr.write_all(b"\n")?;
+            sock_wtr.flush()?;
         }
 
         #[allow(unreachable_code)]
         Ok::<(), std::io::Error>(())
     }
 
+    #[instrument]
+    fn keepalive(sock: TcpStream, timeout: Duration) {
+        let mut poll = String::new();
+        if let Err(e) = sock.set_read_timeout(Some(timeout)) {
+            error!(%e);
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+            return;
+        }
+        let mut sock_rdr = BufReader::new(sock);
+
+        loop {
+            match sock_rdr.read_line(&mut poll) {
+                Ok(_) => debug!("keepalive"),
+                Err(_) => {
+                    warn!("failed to PING within 75 seconds... disconnecting",);
+                    let _ = sock_rdr.into_inner().shutdown(std::net::Shutdown::Both);
+                    break;
+                }
+            }
+
+            match poll.trim() {
+                "PING" => {}
+                _ => break,
+            }
+
+            poll.clear();
+        }
+    }
+
     #[instrument(err, skip(self, topic), fields(topic = %topic.as_ref().display()))]
-    async fn handle_consume<P: AsRef<Path>>(
+    fn handle_consume<P: AsRef<Path>>(
         &mut self,
         sock: TcpStream,
         group: usize,
@@ -148,53 +169,21 @@ impl FranzServer {
 
         info!(topic = %topic.as_ref().display(), "accepted consumer");
 
-        let timeout_token = CancellationToken::new();
-        let (sock_rdr, sock_wtr) = sock.into_split();
+        let sock_c = sock.try_clone()?;
 
-        let timeout_token_c = timeout_token.clone();
-        self.tracker.spawn(async move {
-            let mut poll = String::new();
-            let mut sock_rdr = BufReader::new(sock_rdr);
-
-            loop {
-                match timeout(Duration::from_secs(75), sock_rdr.read_line(&mut poll)).await {
-                    Ok(_) => debug!("keepalive"),
-                    Err(_) => {
-                        warn!("failed to PING within 75 seconds... disconnecting",);
-                        break;
-                    }
-                }
-
-                match poll.trim() {
-                    "PING" => {}
-                    _ => break,
-                }
-
-                poll.clear();
-            }
-
-            timeout_token_c.cancel();
-        });
-
-        let twitter_c = self.twitter.clone();
-        self.tracker.spawn(async move {
-            select! {
-                _ = timeout_token.cancelled() => {}
-                _ = twitter_c.cancelled() => {}
-                _ = Self::push_messages(sock_wtr, rx) => {},
-            }
-        });
+        std::thread::spawn(move || Self::keepalive(sock_c, Duration::from_secs(75)));
+        std::thread::spawn(move || Self::push_messages(sock, rx));
 
         Ok(())
     }
 
     #[instrument(skip(self))]
-    async fn client_handler(&mut self) -> Result<(), io::Error> {
-        let listener = TcpListener::bind(&self.sock_addr).await?;
+    fn client_handler(&mut self) -> Result<(), std::io::Error> {
+        let listener = TcpListener::bind(self.sock_addr)?;
 
         loop {
             // TODO: Select
-            let (mut socket, addr) = match listener.accept().await {
+            let (socket, addr) = match listener.accept() {
                 Ok((s, a)) => (s, a),
                 Err(e) => {
                     error!("failed to accept connection: {:?}", e);
@@ -202,15 +191,24 @@ impl FranzServer {
                 }
             };
 
-            let (sock_rdr, _) = socket.split();
-            let mut sock_rdr = BufReader::new(sock_rdr);
+            if let Err(e) = socket.set_read_timeout(Some(Duration::from_secs(10))) {
+                error!(?socket, %e);
+                continue;
+            };
+
+            let Ok(socket_c) = socket.try_clone() else {
+                error!(?socket, "failed to clone socket");
+                continue;
+            };
+
+            let mut sock_rdr = BufReader::new(socket_c);
 
             info!(%addr, "new client");
 
             // "0" => PRODUCE
             // "1" => CONSUME
             let mut client_kind = String::new();
-            if let Err(e) = sock_rdr.read_line(&mut client_kind).await {
+            if let Err(e) = sock_rdr.read_line(&mut client_kind) {
                 error!(%addr, %e);
                 continue;
             }
@@ -230,34 +228,44 @@ impl FranzServer {
             };
 
             let mut topic = String::new();
-            if let Err(e) = sock_rdr.read_line(&mut topic).await {
+            if let Err(e) = sock_rdr.read_line(&mut topic) {
                 error!(%addr, %e);
                 continue;
             }
             let topic = topic.trim().to_string();
 
+            if let Err(e) = socket.set_read_timeout(None) {
+                error!(?socket, %e);
+            }
+
             let _ = match client_kind {
-                ClientKind::Produce => self.handle_produce(socket, topic).await,
-                ClientKind::Consume => self.handle_consume(socket, 0, topic).await,
+                ClientKind::Produce => self.handle_produce(socket, topic),
+                ClientKind::Consume => self.handle_consume(socket, 0, topic),
                 ClientKind::Info => unreachable!(),
             };
         }
     }
 
-    pub async fn run(mut self) {
+    pub fn run(mut self) {
         info!("starting queue server...");
 
-        let twitter_c = self.twitter.clone();
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
 
-        select! {
-            _ = twitter_c.cancelled() => {},
-            _ = self.client_handler() => {}
-        }
+        ctrlc::set_handler(move || {
+            r.store(false, Ordering::Relaxed);
+        })
+        .expect("Error setting Ctrl-C handler");
 
-        self.twitter.cancel();
-        self.tracker.close();
-        if let Err(e) = timeout(Duration::from_secs(60), self.tracker.wait()).await {
-            error!(%e, "failed to shutdown within timeout");
+        let handle = std::thread::spawn(move || self.client_handler().unwrap());
+
+        while running.load(Ordering::Relaxed) {
+            if handle.is_finished() {
+                handle.join().unwrap();
+                break;
+            }
+
+            std::thread::sleep(Duration::from_secs(5));
         }
 
         info!("shutting down...")

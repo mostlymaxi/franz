@@ -18,10 +18,9 @@ struct Args {
     max_pages: usize,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
     let server = server::FranzServer::new(args.path, args.bind_ip, args.port);
-    server.run().await;
+    server.run();
 }

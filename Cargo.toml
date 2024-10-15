@@ -1,6 +1,6 @@
 [package]
 name = "franz"
-version = "0.4.2"
+version = "0.5.2"
 edition = "2021"
 authors = ["Maxi Saparov <max.saparov@gmail.com>"]
 description = "[WIP] a small, friendly, simple alternative to Apache Kafka"
@@ -15,13 +15,11 @@ license = "MIT"
 [dependencies]
 clap = { version = "4.5.8", features = ["derive"] }
 ctrlc = { version = "3.4.4", features = ["termination"] }
-disk-mpmc = "0.2.1"
+disk-mpmc = "0.3.1"
 num = "0.4.3"
 num-derive = "0.4.2"
 num-traits = "0.2.19"
 thiserror = "1.0.63"
-tokio = { version = "1.38.0", features = ["full"] }
 tokio-scoped = "0.2.0"
-tokio-util = { version = "0.7.12", features = ["rt"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"

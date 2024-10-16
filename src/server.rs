@@ -2,31 +2,20 @@ use disk_mpmc::manager::DataPagesManager;
 use disk_mpmc::{Grouped, Receiver, Sender};
 use num_derive::FromPrimitive;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, BufWriter, Lines, Write};
+use std::fs;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use std::{fs, thread};
 
 use tracing::{debug, error, info, instrument, trace, warn};
-//
-//use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-//use tokio::net::tcp::OwnedWriteHalf;
-//use tokio::net::{TcpListener, TcpStream};
-//use tokio::task::yield_now;
-//use tokio::time::timeout;
-//use tokio::{select, signal};
-//use tokio_util::sync::CancellationToken;
-//use tokio_util::task::TaskTracker;
 
 pub struct FranzServer {
     server_path: PathBuf,
     topics: HashMap<PathBuf, DataPagesManager>,
     sock_addr: SocketAddr,
-    //twitter: CancellationToken,
-    //tracker: TaskTracker, // default_max_pages: usize,
 }
 
 #[repr(u8)]
@@ -42,22 +31,11 @@ impl FranzServer {
     pub fn new(server_path: PathBuf, bind_ip: IpAddr, port: u16) -> FranzServer {
         let sock_addr = SocketAddr::new(bind_ip, port);
         let topics = HashMap::new();
-        //let tracker = TaskTracker::new();
-        //let twitter = CancellationToken::new();
-
-        //let twitter_c = twitter.clone();
-        //
-        //tokio::spawn(async move {
-        //    let _ = signal::ctrl_c().await;
-        //    twitter_c.cancel();
-        //});
 
         FranzServer {
             sock_addr,
             topics,
             server_path,
-            //tracker,
-            //twitter,
         }
     }
 
@@ -84,9 +62,8 @@ impl FranzServer {
         let mut tx = Sender::new(dp_man.clone())?;
         std::thread::spawn(move || {
             let stream = BufReader::new(sock);
-            let mut stream_lines = stream.lines();
 
-            while let Some(line) = stream_lines.next() {
+            for line in stream.lines() {
                 let line = line?;
 
                 trace!(%line);

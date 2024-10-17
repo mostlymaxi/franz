@@ -42,7 +42,7 @@ impl FranzServer {
     #[instrument(err, skip(self, topic), fields(topic = %topic.as_ref().display()))]
     fn handle_produce<P: AsRef<Path>>(
         &mut self,
-        sock: TcpStream,
+        stream: BufReader<TcpStream>,
         topic: P,
     ) -> Result<(), std::io::Error> {
         let dp_man = match self.topics.get(topic.as_ref()) {
@@ -61,7 +61,7 @@ impl FranzServer {
 
         let mut tx = Sender::new(dp_man.clone())?;
         std::thread::spawn(move || {
-            let stream = BufReader::new(sock);
+            // let stream = BufReader::new(sock);
 
             for line in stream.lines() {
                 let line = line?;
@@ -216,7 +216,7 @@ impl FranzServer {
             }
 
             let _ = match client_kind {
-                ClientKind::Produce => self.handle_produce(socket, topic),
+                ClientKind::Produce => self.handle_produce(sock_rdr, topic),
                 ClientKind::Consume => self.handle_consume(socket, 0, topic),
                 ClientKind::Info => unreachable!(),
             };

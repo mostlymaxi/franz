@@ -1,5 +1,5 @@
 use disk_mpmc::manager::DataPagesManager;
-use disk_mpmc::{Grouped, Receiver, Sender};
+use disk_mpmc::{GenReceiver, Receiver, Sender};
 use num_derive::FromPrimitive;
 use std::collections::HashMap;
 use std::fs;
@@ -11,6 +11,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tracing::{debug, error, info, instrument, trace, warn};
+
+use crate::protocol;
 
 pub struct FranzServer {
     server_path: PathBuf,
@@ -42,9 +44,19 @@ impl FranzServer {
     #[instrument(err, skip(self, topic), fields(topic = %topic.as_ref().display()))]
     fn handle_produce<P: AsRef<Path>>(
         &mut self,
-        stream: BufReader<TcpStream>,
+        sock: TcpStream,
         topic: P,
     ) -> Result<(), std::io::Error> {
+        if !topic
+            .as_ref()
+            .as_os_str()
+            .to_string_lossy()
+            .chars()
+            .all(char::is_alphanumeric)
+        {
+            return Err(std::io::Error::other("topic must be alphanumeric"));
+        }
+
         let dp_man = match self.topics.get(topic.as_ref()) {
             Some(d) => d.clone(),
             None => {
@@ -61,7 +73,7 @@ impl FranzServer {
 
         let mut tx = Sender::new(dp_man.clone())?;
         std::thread::spawn(move || {
-            // let stream = BufReader::new(sock);
+            let stream = BufReader::new(sock);
 
             for line in stream.lines() {
                 let line = line?;
@@ -78,7 +90,7 @@ impl FranzServer {
         Ok(())
     }
 
-    fn push_messages(sock: TcpStream, mut rx: Receiver<Grouped>) -> Result<(), std::io::Error> {
+    fn push_messages<R: GenReceiver>(sock: TcpStream, mut rx: R) -> Result<(), std::io::Error> {
         let mut sock_wtr = BufWriter::new(sock);
 
         loop {
@@ -125,7 +137,7 @@ impl FranzServer {
     fn handle_consume<P: AsRef<Path>>(
         &mut self,
         sock: TcpStream,
-        group: usize,
+        group: Option<u16>,
         topic: P,
     ) -> Result<(), std::io::Error> {
         let dp_man = match self.topics.get(topic.as_ref()) {
@@ -139,17 +151,23 @@ impl FranzServer {
                 d
             }
         };
-
-        // TODO: assert that group is less than
-        // maximum groups
-        let rx = Receiver::new(group, dp_man.clone())?;
-
         info!(topic = %topic.as_ref().display(), "accepted consumer");
 
         let sock_c = sock.try_clone()?;
 
         std::thread::spawn(move || Self::keepalive(sock_c, Duration::from_secs(75)));
-        std::thread::spawn(move || Self::push_messages(sock, rx));
+
+        std::thread::spawn(move || match group {
+            Some(g) => {
+                let rx = Receiver::new(g.into(), dp_man).unwrap();
+
+                Self::push_messages(sock, rx).unwrap();
+            }
+            None => {
+                let rx = Receiver::new_anon(dp_man).unwrap();
+                Self::push_messages(sock, rx).unwrap();
+            }
+        });
 
         Ok(())
     }
@@ -160,71 +178,32 @@ impl FranzServer {
 
         loop {
             // TODO: Select
-            let (socket, addr) = match listener.accept() {
+            let (mut sock, _) = match listener.accept() {
                 Ok((s, a)) => (s, a),
                 Err(e) => {
-                    error!("failed to accept connection: {:?}", e);
+                    error!(%e, "failed to accept connection:");
                     continue;
                 }
             };
 
-            if let Err(e) = socket.set_read_timeout(Some(Duration::from_secs(10))) {
-                error!(?socket, %e);
+            let Some(handshake) = protocol::Handshake::parse(&mut sock) else {
+                error!(?sock, "failed to parse handshake:");
                 continue;
             };
 
-            let Ok(socket_c) = socket.try_clone() else {
-                error!(?socket, "failed to clone socket");
-                continue;
-            };
-
-            let mut sock_rdr = BufReader::new(socket_c);
-
-            info!(%addr, "new client");
-
-            // "0" => PRODUCE
-            // "1" => CONSUME
-            let mut client_kind = String::new();
-            if let Err(e) = sock_rdr.read_line(&mut client_kind) {
-                error!(%addr, %e);
-                continue;
+            if let Err(e) = match handshake.connection_type.as_str() {
+                "produce" => self.handle_produce(sock, handshake.topic),
+                "consume" => self.handle_consume(sock, handshake.group, handshake.topic),
+                "info" => Ok(()),
+                _ => Ok(()),
+            } {
+                error!(%e);
             }
-            let client_kind = match client_kind.trim().parse::<u8>() {
-                Ok(c) => c,
-                Err(e) => {
-                    error!(%addr, %e);
-                    continue;
-                }
-            };
-            let client_kind = match num::FromPrimitive::from_u8(client_kind) {
-                Some(c) => c,
-                None => {
-                    error!(%addr, %client_kind, "failed to parse client kind");
-                    continue;
-                }
-            };
-
-            let mut topic = String::new();
-            if let Err(e) = sock_rdr.read_line(&mut topic) {
-                error!(%addr, %e);
-                continue;
-            }
-            let topic = topic.trim().to_string();
-
-            if let Err(e) = socket.set_read_timeout(None) {
-                error!(?socket, %e);
-            }
-
-            let _ = match client_kind {
-                ClientKind::Produce => self.handle_produce(sock_rdr, topic),
-                ClientKind::Consume => self.handle_consume(socket, 0, topic),
-                ClientKind::Info => unreachable!(),
-            };
         }
     }
 
     pub fn run(mut self) {
-        info!("starting queue server...");
+        info!(%self.sock_addr, "starting franz server:");
 
         let running = Arc::new(AtomicBool::new(true));
         let r = running.clone();
@@ -242,7 +221,7 @@ impl FranzServer {
                 break;
             }
 
-            std::thread::sleep(Duration::from_secs(5));
+            std::thread::sleep(Duration::from_secs(2));
         }
 
         info!("shutting down...")

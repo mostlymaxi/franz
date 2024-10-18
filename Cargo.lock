@@ -169,9 +169,9 @@ dependencies = [
 
 [[package]]
 name = "disk-mpmc"
-version = "0.3.4"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd11416bf2d5e2c3a5c834932e538b61d9c10966ea9b8e33d7e8fce991944ff6"
+checksum = "9dc628b68c64a5ac416fd6256ae05a5225ca4b2e752c0c616a56c6d55bbe91c4"
 dependencies = [
  "const-str",
  "linux-futex",

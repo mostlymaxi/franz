@@ -1,5 +1,7 @@
 use std::{collections::HashMap, io::Read, net::TcpStream, time::Duration};
 
+use tracing::{instrument, trace};
+
 const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 const HANDSHAKE_NUM_FIELDS: usize = 16;
 type HandshakeHeader = u32;
@@ -54,14 +56,17 @@ impl Handshake {
         Some(handshake)
     }
 
+    #[instrument]
     pub fn parse(sock: &mut TcpStream) -> Option<Self> {
         sock.set_read_timeout(Some(Duration::from_secs(HANDSHAKE_TIMEOUT_SECS)))
             .ok()?;
 
         let handshake_length = Self::parse_length(sock)?;
+        trace!(?handshake_length);
 
         let mut data = vec![0; handshake_length as usize];
         sock.read_exact(&mut data).ok()?;
+        trace!(?data);
 
         let handshake = Self::parse_data(data)?;
 

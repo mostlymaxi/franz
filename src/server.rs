@@ -178,7 +178,7 @@ impl FranzServer {
         let listener = TcpListener::bind(self.sock_addr)?;
 
         loop {
-            if self.running.load(Ordering::Relaxed) {
+            if !self.running.load(Ordering::Relaxed) {
                 break;
             }
 
@@ -190,7 +190,7 @@ impl FranzServer {
                 }
             };
 
-            if self.running.load(Ordering::Relaxed) {
+            if !self.running.load(Ordering::Relaxed) {
                 break;
             }
 

@@ -1,6 +1,5 @@
 use disk_mpmc::manager::DataPagesManager;
 use disk_mpmc::{GenReceiver, Receiver, Sender};
-use num_derive::FromPrimitive;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -226,9 +225,11 @@ impl FranzServer {
     pub fn run(mut self) {
         info!(%self.sock_addr, "starting franz server:");
 
+        let running = self.running.clone();
+
         let handle = std::thread::spawn(move || self.client_handler().unwrap());
 
-        while self.running.load(Ordering::Relaxed) {
+        while running.load(Ordering::Relaxed) {
             if handle.is_finished() {
                 handle.join().unwrap();
                 break;

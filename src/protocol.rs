@@ -2,7 +2,7 @@ use std::{collections::HashMap, io::Read, net::TcpStream, time::Duration};
 
 const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 const HANDSHAKE_NUM_FIELDS: usize = 16;
-type HandshakeHeaderType = u32;
+type HandshakeHeader = u32;
 
 #[derive(Debug)]
 pub struct Handshake {
@@ -12,12 +12,22 @@ pub struct Handshake {
     pub api: String,
 }
 
+// [lengh of string | u32][version=1,group=3,topic=test,api=produce | utf8]
+// (api)\n(topic)\n
+//
+// consuming group 1
+// 1, 2, 3, 4, 5
+// ^  ^^ ^ ^^  ^
+//
+// consuming group None
+// 1, 2, 3, 4, 5
+//
 impl Handshake {
-    fn parse_length(sock: &mut TcpStream) -> Option<HandshakeHeaderType> {
-        let mut handshake_length = [0; size_of::<HandshakeHeaderType>()];
+    fn parse_length(sock: &mut TcpStream) -> Option<HandshakeHeader> {
+        let mut handshake_length = [0; size_of::<HandshakeHeader>()];
         sock.read_exact(&mut handshake_length).ok()?;
 
-        Some(HandshakeHeaderType::from_be_bytes(handshake_length))
+        Some(HandshakeHeader::from_be_bytes(handshake_length))
     }
 
     fn parse_data(data: Vec<u8>) -> Option<HashMap<String, String>> {
@@ -79,7 +89,7 @@ mod test {
     fn parse_data() {
         let input = "version=1,topic=test,connection_type=producer";
         let mut data = Vec::new();
-        data.extend_from_slice(&(input.len() as HandshakeHeaderType).to_be_bytes());
+        data.extend_from_slice(&(input.len() as HandshakeHeader).to_be_bytes());
         data.extend_from_slice(input.as_bytes());
 
         let h = Handshake::parse_data(data).unwrap();

@@ -18,14 +18,7 @@ pub struct FranzServer {
     server_path: PathBuf,
     topics: HashMap<PathBuf, DataPagesManager>,
     sock_addr: SocketAddr,
-}
-
-#[repr(u8)]
-#[derive(Debug, FromPrimitive)]
-enum ClientKind {
-    Produce = 0,
-    Consume = 1,
-    Info = 2,
+    running: Arc<AtomicBool>,
 }
 
 impl FranzServer {
@@ -34,10 +27,19 @@ impl FranzServer {
         let sock_addr = SocketAddr::new(bind_ip, port);
         let topics = HashMap::new();
 
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+
+        ctrlc::set_handler(move || {
+            r.store(false, Ordering::Relaxed);
+        })
+        .expect("Error setting Ctrl-C handler");
+
         FranzServer {
             sock_addr,
             topics,
             server_path,
+            running,
         }
     }
 
@@ -140,6 +142,16 @@ impl FranzServer {
         group: Option<u16>,
         topic: P,
     ) -> Result<(), std::io::Error> {
+        if !topic
+            .as_ref()
+            .as_os_str()
+            .to_string_lossy()
+            .chars()
+            .all(char::is_alphanumeric)
+        {
+            return Err(std::io::Error::other("topic must be alphanumeric"));
+        }
+
         let dp_man = match self.topics.get(topic.as_ref()) {
             Some(d) => d.clone(),
             None => {
@@ -177,7 +189,10 @@ impl FranzServer {
         let listener = TcpListener::bind(self.sock_addr)?;
 
         loop {
-            // TODO: Select
+            if self.running.load(Ordering::Relaxed) {
+                break;
+            }
+
             let (mut sock, _) = match listener.accept() {
                 Ok((s, a)) => (s, a),
                 Err(e) => {
@@ -186,12 +201,16 @@ impl FranzServer {
                 }
             };
 
+            if self.running.load(Ordering::Relaxed) {
+                break;
+            }
+
             let Some(handshake) = protocol::Handshake::parse(&mut sock) else {
                 error!(?sock, "failed to parse handshake:");
                 continue;
             };
 
-            if let Err(e) = match handshake.connection_type.as_str() {
+            if let Err(e) = match handshake.api.as_str() {
                 "produce" => self.handle_produce(sock, handshake.topic),
                 "consume" => self.handle_consume(sock, handshake.group, handshake.topic),
                 "info" => Ok(()),
@@ -200,22 +219,16 @@ impl FranzServer {
                 error!(%e);
             }
         }
+
+        Ok(())
     }
 
     pub fn run(mut self) {
         info!(%self.sock_addr, "starting franz server:");
 
-        let running = Arc::new(AtomicBool::new(true));
-        let r = running.clone();
-
-        ctrlc::set_handler(move || {
-            r.store(false, Ordering::Relaxed);
-        })
-        .expect("Error setting Ctrl-C handler");
-
         let handle = std::thread::spawn(move || self.client_handler().unwrap());
 
-        while running.load(Ordering::Relaxed) {
+        while self.running.load(Ordering::Relaxed) {
             if handle.is_finished() {
                 handle.join().unwrap();
                 break;

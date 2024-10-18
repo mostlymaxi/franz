@@ -1,14 +1,15 @@
 use std::{collections::HashMap, io::Read, net::TcpStream, time::Duration};
 
 const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
-const HANDSHAKE_NUM_FIELDS: usize = 4;
+const HANDSHAKE_NUM_FIELDS: usize = 16;
 type HandshakeHeaderType = u32;
 
+#[derive(Debug)]
 pub struct Handshake {
     pub version: u16,
     pub group: Option<u16>,
     pub topic: String,
-    pub connection_type: String,
+    pub api: String,
 }
 
 impl Handshake {
@@ -21,17 +22,23 @@ impl Handshake {
 
     fn parse_data(data: Vec<u8>) -> Option<HashMap<String, String>> {
         let data = String::from_utf8(data).ok()?;
-        let mut data = data.split('=');
+        let mut data = data.split(',');
 
         let mut handshake = HashMap::with_capacity(HANDSHAKE_NUM_FIELDS);
-        loop {
-            let Some(field) = data.next() else {
+        for _ in 0..HANDSHAKE_NUM_FIELDS {
+            let Some(kv) = data.next() else {
                 break;
             };
 
-            let field = field.trim().to_lowercase();
-            let value = data.next()?.trim().to_string();
-            handshake.insert(field, value);
+            let mut kv = kv.split('=');
+            let key = kv.next()?;
+            let Some(value) = kv.next() else {
+                continue;
+            };
+
+            let key = key.trim().to_lowercase();
+            let value = value.trim().to_string();
+            handshake.insert(key, value);
         }
 
         Some(handshake)
@@ -59,7 +66,23 @@ impl Handshake {
             version: handshake.get("version")?.parse().ok()?,
             group,
             topic: handshake.get("topic")?.parse().ok()?,
-            connection_type: handshake.get("connection_type")?.to_string(),
+            api: handshake.get("api")?.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parse_data() {
+        let input = "version=1,topic=test,connection_type=producer";
+        let mut data = Vec::new();
+        data.extend_from_slice(&(input.len() as HandshakeHeaderType).to_be_bytes());
+        data.extend_from_slice(input.as_bytes());
+
+        let h = Handshake::parse_data(data).unwrap();
+        eprintln!("{h:?}");
     }
 }

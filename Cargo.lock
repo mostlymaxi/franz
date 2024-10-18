@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "franz"
-version = "0.5.2"
+version = "0.6.2"
 dependencies = [
  "clap",
  "ctrlc",

@@ -14,7 +14,6 @@ type HandshakeHeader = u32;
 ///
 /// ### example
 /// version=1,topic=test_topic_name,api=produce
-///
 #[derive(Debug)]
 pub struct Handshake {
     pub _version: u16,

@@ -4,24 +4,25 @@ const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 const HANDSHAKE_NUM_FIELDS: usize = 16;
 type HandshakeHeader = u32;
 
+/// ## The Franz Porotocol
+/// [message length : u32]([key]=[value] : utf8)
+///
+/// ### mandatory keys
+/// - version
+/// - topic
+/// - api
+///
+/// ### example
+/// version=1,topic=test_topic_name,api=produce
+///
 #[derive(Debug)]
 pub struct Handshake {
-    pub version: u16,
+    pub _version: u16,
     pub group: Option<u16>,
     pub topic: String,
     pub api: String,
 }
 
-// [lengh of string | u32][version=1,group=3,topic=test,api=produce | utf8]
-// (api)\n(topic)\n
-//
-// consuming group 1
-// 1, 2, 3, 4, 5
-// ^  ^^ ^ ^^  ^
-//
-// consuming group None
-// 1, 2, 3, 4, 5
-//
 impl Handshake {
     fn parse_length(sock: &mut TcpStream) -> Option<HandshakeHeader> {
         let mut handshake_length = [0; size_of::<HandshakeHeader>()];
@@ -73,7 +74,7 @@ impl Handshake {
         sock.set_read_timeout(None).ok()?;
 
         Some(Handshake {
-            version: handshake.get("version")?.parse().ok()?,
+            _version: handshake.get("version")?.parse().ok()?,
             group,
             topic: handshake.get("topic")?.parse().ok()?,
             api: handshake.get("api")?.to_string(),
@@ -87,12 +88,12 @@ mod test {
 
     #[test]
     fn parse_data() {
-        let input = "version=1,topic=test,connection_type=producer";
+        let input = "version=1,topic=test,api=producer";
         let mut data = Vec::new();
-        data.extend_from_slice(&(input.len() as HandshakeHeader).to_be_bytes());
+        // data.extend_from_slice(&(input.len() as HandshakeHeader).to_be_bytes());
         data.extend_from_slice(input.as_bytes());
 
         let h = Handshake::parse_data(data).unwrap();
-        eprintln!("{h:?}");
+        eprintln!("{:#?}", h);
     }
 }

@@ -1,6 +1,7 @@
 use disk_mpmc::manager::DataPagesManager;
 use disk_mpmc::{GenReceiver, Receiver, Sender};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream};
@@ -15,7 +16,7 @@ use crate::protocol;
 
 pub struct FranzServer {
     server_path: PathBuf,
-    topics: HashMap<PathBuf, DataPagesManager>,
+    topics: HashMap<OsString, DataPagesManager>,
     sock_addr: SocketAddr,
     running: Arc<AtomicBool>,
 }
@@ -48,25 +49,19 @@ impl FranzServer {
         sock: TcpStream,
         topic: P,
     ) -> Result<(), std::io::Error> {
-        if !topic
-            .as_ref()
-            .as_os_str()
-            .to_string_lossy()
-            .chars()
-            .all(char::is_alphanumeric)
-        {
-            return Err(std::io::Error::other("topic must be alphanumeric"));
-        }
+        let Some(topic) = topic.as_ref().file_name() else {
+            return Err(std::io::Error::other("unable to parse topic"));
+        };
 
-        let dp_man = match self.topics.get(topic.as_ref()) {
+        let dp_man = match self.topics.get(topic) {
             Some(d) => d.clone(),
             None => {
-                fs::create_dir_all(self.server_path.join(&topic))?;
-                let d = DataPagesManager::new(self.server_path.join(&topic))?;
+                fs::create_dir_all(self.server_path.join(topic))?;
+                let d = DataPagesManager::new(self.server_path.join(topic))?;
 
-                self.topics.insert(topic.as_ref().into(), d.clone());
+                self.topics.insert(topic.into(), d.clone());
 
-                debug!(topic = %topic.as_ref().display(), "created new topic");
+                debug!(topic = ?topic, "created new topic");
 
                 d
             }
@@ -141,28 +136,23 @@ impl FranzServer {
         group: Option<u16>,
         topic: P,
     ) -> Result<(), std::io::Error> {
-        if !topic
-            .as_ref()
-            .as_os_str()
-            .to_string_lossy()
-            .chars()
-            .all(char::is_alphanumeric)
-        {
-            return Err(std::io::Error::other("topic must be alphanumeric"));
-        }
+        let Some(topic) = topic.as_ref().file_name() else {
+            return Err(std::io::Error::other("unable to parse topic"));
+        };
 
-        let dp_man = match self.topics.get(topic.as_ref()) {
+        let dp_man = match self.topics.get(topic) {
             Some(d) => d.clone(),
             None => {
-                fs::create_dir_all(self.server_path.join(&topic))?;
-                let d = DataPagesManager::new(self.server_path.join(&topic))?;
+                fs::create_dir_all(self.server_path.join(topic))?;
+                let d = DataPagesManager::new(self.server_path.join(topic))?;
 
-                self.topics.insert(topic.as_ref().into(), d.clone());
+                self.topics.insert(topic.into(), d.clone());
 
                 d
             }
         };
-        info!(topic = %topic.as_ref().display(), "accepted consumer");
+
+        info!(topic = ?topic, "accepted consumer");
 
         let sock_c = sock.try_clone()?;
 

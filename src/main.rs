@@ -9,7 +9,7 @@ use std::{
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long, default_value_t = PathBuf::from("/var/lib/fran"))]
+    #[arg(short, long)]
     path: PathBuf,
     #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
     bind_ip: IpAddr,

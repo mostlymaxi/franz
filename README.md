@@ -1,5 +1,7 @@
 # Franz
-A simple and friendlier alternative to Apache Kafka
+A simple and friendlier persistent message-queue / pub-sub built for speed (blazingly fast)!
+
+The goal of Franz is to be able to handle millions of messages per second with a light memory footprint (it is however, rough on the disk).
 
 
 ### Usage
@@ -7,24 +9,18 @@ A simple and friendlier alternative to Apache Kafka
 franz --path /path/to/store/data
 ```
 
+see ```franz --help``` for more details.
+
 ### Protocol
-The majority of the protocol is newline delimited and the order of messages is more important
+[message length : u32]([key]=[value] : utf8)
 
-1. the kind of client (num)
-2. topic name
+#### mandatory keys
+- version
+- topic
+- api
 
-```doc
-0\ntest\n
-^   ^
-|   |
-|   topic name
-|
-client kind
-```
-
-client kind is defined as a number:
-0 => producer
-1 => consumer
+#### example key-values
+ ```version=1,topic=test_topic_name,api=produce```
 
 ### Example
 spin up a franz instance
@@ -34,20 +30,9 @@ franz --path /tmp/franz-test
 
 in another terminal connect to the instance with netcat
 ```doc
-nc localhost 8085
+echo -ne "\x00\x00\x00\x20version=1,topic=test,api=produce" | nc localhost 8085
 ```
-
-make a producer client by sending a "0"
-```doc
-0
-```
-
-select and create a topic by sending a "test_topic"
-```doc
-test_topic
-```
-
-send some messages
+send some (newline delimited) messages
 ```doc
 hello
 world

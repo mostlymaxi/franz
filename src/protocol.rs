@@ -1,10 +1,11 @@
 use std::{collections::HashMap, io::Read, net::TcpStream, time::Duration};
 
-use tracing::{instrument, trace};
+use thiserror::Error;
+use tracing::{debug, instrument, trace};
 
 const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 const HANDSHAKE_NUM_FIELDS: usize = 16;
-type HandshakeHeader = u32;
+type HandshakeHeaderNum = u32;
 
 /// ## The Franz Porotocol
 /// [message length : u32]([key]=[value] : utf8)
@@ -24,16 +25,34 @@ pub struct Handshake {
     pub api: String,
 }
 
-impl Handshake {
-    fn parse_length(sock: &mut TcpStream) -> Option<HandshakeHeader> {
-        let mut handshake_length = [0; size_of::<HandshakeHeader>()];
-        sock.read_exact(&mut handshake_length).ok()?;
+#[derive(Error, Debug)]
+pub enum HandshakeError {
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    ParseNum(#[from] std::num::ParseIntError),
+    #[error(transparent)]
+    FromUtf8Error(#[from] std::string::FromUtf8Error),
+    #[error("could not find expected key: {0}")]
+    ExpectedKey(&'static str),
+    #[error("invalid header format")]
+    InvalidFormat,
+}
 
-        Some(HandshakeHeader::from_be_bytes(handshake_length))
+impl Handshake {
+    #[instrument]
+    fn parse_length(sock: &mut TcpStream) -> Result<HandshakeHeaderNum, HandshakeError> {
+        let mut handshake_length = [0; size_of::<HandshakeHeaderNum>()];
+        sock.read_exact(&mut handshake_length)?;
+
+        Ok(HandshakeHeaderNum::from_be_bytes(handshake_length))
     }
 
-    fn parse_data(data: Vec<u8>) -> Option<HashMap<String, String>> {
-        let data = String::from_utf8(data).ok()?;
+    #[instrument(skip(data))]
+    fn parse_data(data: Vec<u8>) -> Result<HashMap<String, String>, HandshakeError> {
+        let data = String::from_utf8(data)?;
+        trace!(%data);
+
         let mut data = data.split(',');
 
         let mut handshake = HashMap::with_capacity(HANDSHAKE_NUM_FIELDS);
@@ -43,7 +62,7 @@ impl Handshake {
             };
 
             let mut kv = kv.split('=');
-            let key = kv.next()?;
+            let key = kv.next().ok_or(HandshakeError::InvalidFormat)?;
             let Some(value) = kv.next() else {
                 continue;
             };
@@ -53,35 +72,43 @@ impl Handshake {
             handshake.insert(key, value);
         }
 
-        Some(handshake)
+        Ok(handshake)
     }
 
     #[instrument]
-    pub fn parse(sock: &mut TcpStream) -> Option<Self> {
-        sock.set_read_timeout(Some(Duration::from_secs(HANDSHAKE_TIMEOUT_SECS)))
-            .ok()?;
+    pub fn try_parse(sock: &mut TcpStream) -> Result<Self, HandshakeError> {
+        sock.set_read_timeout(Some(Duration::from_secs(HANDSHAKE_TIMEOUT_SECS)))?;
 
         let handshake_length = Self::parse_length(sock)?;
-        trace!(?handshake_length);
+        debug!(?handshake_length);
 
         let mut data = vec![0; handshake_length as usize];
-        sock.read_exact(&mut data).ok()?;
-        trace!(?data);
+        sock.read_exact(&mut data)?;
 
         let handshake = Self::parse_data(data)?;
 
         let group = match handshake.get("group") {
             None => None,
-            Some(g) => Some(g.parse().ok()?),
+            Some(g) => Some(g.parse()?),
         };
 
-        sock.set_read_timeout(None).ok()?;
+        sock.set_read_timeout(None)?;
 
-        Some(Handshake {
-            _version: handshake.get("version")?.parse().ok()?,
+        Ok(Handshake {
+            _version: handshake
+                .get("version")
+                .ok_or(HandshakeError::ExpectedKey("version"))?
+                .parse()?,
             group,
-            topic: handshake.get("topic")?.parse().ok()?,
-            api: handshake.get("api")?.to_string(),
+            topic: handshake
+                .get("topic")
+                .ok_or(HandshakeError::ExpectedKey("topic"))?
+                .parse()
+                .expect("infalible"),
+            api: handshake
+                .get("api")
+                .ok_or(HandshakeError::ExpectedKey("api"))?
+                .to_string(),
         })
     }
 }

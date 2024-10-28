@@ -67,8 +67,11 @@ impl FranzServer {
             }
         };
 
+        info!(topic = ?topic, "accepted producer");
+
         let mut tx = Sender::new(dp_man.clone())?;
         std::thread::spawn(move || {
+            // TODO: figure out multithreaded spans
             let stream = BufReader::new(sock);
 
             for line in stream.lines() {
@@ -86,6 +89,7 @@ impl FranzServer {
         Ok(())
     }
 
+    #[instrument(skip(rx))]
     fn push_messages<R: GenReceiver>(sock: TcpStream, mut rx: R) -> Result<(), std::io::Error> {
         let mut sock_wtr = BufWriter::new(sock);
 
@@ -93,6 +97,7 @@ impl FranzServer {
             let msg = rx.pop()?;
             sock_wtr.write_all(msg)?;
             sock_wtr.write_all(b"\n")?;
+
             sock_wtr.flush()?;
         }
 
@@ -140,19 +145,21 @@ impl FranzServer {
             return Err(std::io::Error::other("unable to parse topic"));
         };
 
-        let dp_man = match self.topics.get(topic) {
+        let topic = topic.to_owned();
+
+        let dp_man = match self.topics.get(&topic) {
             Some(d) => d.clone(),
             None => {
-                fs::create_dir_all(self.server_path.join(topic))?;
-                let d = DataPagesManager::new(self.server_path.join(topic))?;
+                fs::create_dir_all(self.server_path.join(&topic))?;
+                let d = DataPagesManager::new(self.server_path.join(&topic))?;
 
-                self.topics.insert(topic.into(), d.clone());
+                self.topics.insert(topic.clone(), d.clone());
+
+                debug!(topic = ?topic, "created new topic");
 
                 d
             }
         };
-
-        info!(topic = ?topic, "accepted consumer");
 
         let sock_c = sock.try_clone()?;
 
@@ -162,10 +169,14 @@ impl FranzServer {
             Some(g) => {
                 let rx = Receiver::new(g.into(), dp_man).unwrap();
 
+                info!(topic = ?topic, group = ?g, "accepted consumer");
+
                 Self::push_messages(sock, rx).unwrap();
             }
             None => {
                 let rx = Receiver::new_anon(dp_man).unwrap();
+
+                info!(topic = ?topic, "accepted anonymous consumer");
                 Self::push_messages(sock, rx).unwrap();
             }
         });
@@ -179,6 +190,7 @@ impl FranzServer {
 
         loop {
             if !self.running.load(Ordering::Relaxed) {
+                debug!("exiting client handler (1)");
                 break;
             }
 
@@ -191,12 +203,16 @@ impl FranzServer {
             };
 
             if !self.running.load(Ordering::Relaxed) {
+                debug!("exiting client handler (2)");
                 break;
             }
 
-            let Some(handshake) = protocol::Handshake::parse(&mut sock) else {
-                error!(?sock, "failed to parse handshake:");
-                continue;
+            let handshake = match protocol::Handshake::try_parse(&mut sock) {
+                Ok(h) => h,
+                Err(e) => {
+                    error!(?sock, ?e, "failed to parse handshake");
+                    continue;
+                }
             };
 
             if let Err(e) = match handshake.api.as_str() {

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{debug, debug_span, error, info, info_span, instrument, trace, trace_span, warn};
+use tracing::{debug, error, info, info_span, instrument, trace, trace_span, warn};
 
 use crate::protocol;
 

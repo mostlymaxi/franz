@@ -1,7 +1,7 @@
 use std::{collections::HashMap, io::Read, net::TcpStream, time::Duration};
 
 use thiserror::Error;
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument};
 
 const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 const HANDSHAKE_NUM_FIELDS: usize = 16;
@@ -51,7 +51,7 @@ impl Handshake {
     #[instrument(skip(data))]
     fn parse_data(data: Vec<u8>) -> Result<HashMap<String, String>, HandshakeError> {
         let data = String::from_utf8(data)?;
-        trace!(%data);
+        debug!(%data);
 
         let mut data = data.split(',');
 

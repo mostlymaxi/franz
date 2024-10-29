@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, trace_span, warn};
 
 use crate::protocol;
 
@@ -68,9 +68,12 @@ impl FranzServer {
         };
 
         info!(topic = ?topic, "accepted producer");
+        let thread_span = trace_span!("producer_thread");
 
         let mut tx = Sender::new(dp_man.clone())?;
         std::thread::spawn(move || {
+            let _entered = thread_span.entered();
+
             // TODO: figure out multithreaded spans
             let stream = BufReader::new(sock);
 

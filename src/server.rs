@@ -135,7 +135,17 @@ impl FranzServer {
 
             match poll.trim() {
                 "PING" => {}
-                m => warn!(%m, "recieved keepalive message that was not 'PING'... exiting"),
+                "" => {
+                    debug!("received empty keepalive... exiting");
+                    let _ = sock_rdr.into_inner().shutdown(std::net::Shutdown::Both);
+                    break;
+                }
+                m => {
+                    warn!(%m, "recieved keepalive message that was not 'PING'... exiting");
+
+                    let _ = sock_rdr.into_inner().shutdown(std::net::Shutdown::Both);
+                    break;
+                }
             }
 
             poll.clear();
@@ -185,14 +195,19 @@ impl FranzServer {
 
                 info!(topic = ?topic, group = ?g, "accepted consumer");
 
-                Self::push_messages(sock, rx).unwrap();
+                if let Err(err) = Self::push_messages(sock, rx) {
+                    warn!(%err, "tried to push message to closed consumer. message lost")
+                }
             }
             None => {
                 let _entered = thread_span.entered();
                 let rx = Receiver::new_anon(dp_man).unwrap();
 
                 info!(topic = ?topic, "accepted anonymous consumer");
-                Self::push_messages(sock, rx).unwrap();
+
+                if let Err(err) = Self::push_messages(sock, rx) {
+                    warn!(%err, "tried to push message to closed consumer. message lost")
+                }
             }
         });
 

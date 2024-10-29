@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::{debug, error, info, instrument, trace, trace_span, warn};
+use tracing::{debug, debug_span, error, info, info_span, instrument, trace, trace_span, warn};
 
 use crate::protocol;
 
@@ -68,13 +68,13 @@ impl FranzServer {
         };
 
         info!(topic = ?topic, "accepted producer");
+
         let thread_span = trace_span!("producer_thread");
 
         let mut tx = Sender::new(dp_man.clone())?;
         std::thread::spawn(move || {
             let _entered = thread_span.entered();
 
-            // TODO: figure out multithreaded spans
             let stream = BufReader::new(sock);
 
             for line in stream.lines() {
@@ -92,7 +92,6 @@ impl FranzServer {
         Ok(())
     }
 
-    #[instrument(skip(rx))]
     fn push_messages<R: GenReceiver>(sock: TcpStream, mut rx: R) -> Result<(), std::io::Error> {
         let mut sock_wtr = BufWriter::new(sock);
 
@@ -102,13 +101,17 @@ impl FranzServer {
             sock_wtr.write_all(b"\n")?;
 
             sock_wtr.flush()?;
+
+            // WARN: this needs to be feature flagged
+            let msg = String::from_utf8_lossy(msg);
+            trace!(%msg);
         }
 
         #[allow(unreachable_code)]
         Ok::<(), std::io::Error>(())
     }
 
-    #[instrument]
+    #[instrument(skip(sock))]
     fn keepalive(sock: TcpStream, timeout: Duration) {
         let mut poll = String::new();
         if let Err(e) = sock.set_read_timeout(Some(timeout)) {
@@ -121,6 +124,8 @@ impl FranzServer {
         loop {
             match sock_rdr.read_line(&mut poll) {
                 Ok(_) => debug!("keepalive"),
+                // TODO: check if error is actually a timeout
+                // or something else
                 Err(_) => {
                     warn!("failed to PING within 75 seconds... disconnecting",);
                     let _ = sock_rdr.into_inner().shutdown(std::net::Shutdown::Both);
@@ -130,7 +135,7 @@ impl FranzServer {
 
             match poll.trim() {
                 "PING" => {}
-                _ => break,
+                m => warn!(%m, "recieved keepalive message that was not 'PING'... exiting"),
             }
 
             poll.clear();
@@ -166,10 +171,16 @@ impl FranzServer {
 
         let sock_c = sock.try_clone()?;
 
-        std::thread::spawn(move || Self::keepalive(sock_c, Duration::from_secs(75)));
+        let keepalive_span = info_span!("keepalive_thread");
+        std::thread::spawn(move || {
+            let _entered = keepalive_span.entered();
+            Self::keepalive(sock_c, Duration::from_secs(75))
+        });
 
+        let thread_span = trace_span!("consumer_thread");
         std::thread::spawn(move || match group {
             Some(g) => {
+                let _entered = thread_span.entered();
                 let rx = Receiver::new(g.into(), dp_man).unwrap();
 
                 info!(topic = ?topic, group = ?g, "accepted consumer");
@@ -177,6 +188,7 @@ impl FranzServer {
                 Self::push_messages(sock, rx).unwrap();
             }
             None => {
+                let _entered = thread_span.entered();
                 let rx = Receiver::new_anon(dp_man).unwrap();
 
                 info!(topic = ?topic, "accepted anonymous consumer");

@@ -1,9 +1,9 @@
 [package]
 name = "franz"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2021"
 authors = ["Maxi Saparov <max.saparov@gmail.com>"]
-description = "[WIP] a small, friendly, simple alternative to Apache Kafka"
+description = "a simple, friendly, and blazingly fast alternative to Apache Kafka"
 documentation = "https://docs.rs/franz"
 homepage = "https://github.com/MostlyMaxi/franz"
 repository = "https://github.com/MostlyMaxi/franz"

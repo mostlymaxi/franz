@@ -39,10 +39,13 @@ pub enum HandshakeError {
     InvalidFormat,
 }
 
+const REASONABLE_HANDSHAKE_LENGTH_LIMIT: u32 = 1_000_000;
+
 impl Handshake {
     #[instrument]
     fn parse_length(sock: &mut TcpStream) -> Result<HandshakeHeaderNum, HandshakeError> {
         let mut handshake_length = [0; size_of::<HandshakeHeaderNum>()];
+
         sock.read_exact(&mut handshake_length)?;
 
         Ok(HandshakeHeaderNum::from_be_bytes(handshake_length))
@@ -80,6 +83,11 @@ impl Handshake {
         sock.set_read_timeout(Some(Duration::from_secs(HANDSHAKE_TIMEOUT_SECS)))?;
 
         let handshake_length = Self::parse_length(sock)?;
+
+        if handshake_length > REASONABLE_HANDSHAKE_LENGTH_LIMIT {
+            return Err(HandshakeError::InvalidFormat);
+        }
+
         debug!(?handshake_length);
 
         let mut data = vec![0; handshake_length as usize];

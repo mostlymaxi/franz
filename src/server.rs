@@ -78,10 +78,14 @@ impl FranzServer {
             let stream = BufReader::new(sock);
 
             for line in stream.lines() {
-                let line = line?;
+                trace_span!("push").in_scope(|| {
+                    let line = line?;
 
-                trace!(%line);
-                tx.push(line)?;
+                    trace!(%line);
+                    tx.push(line)?;
+
+                    Ok::<(), std::io::Error>(())
+                })?;
             }
 
             info!("client disconnected");
@@ -263,7 +267,11 @@ impl FranzServer {
 
         let running = self.running.clone();
 
-        let handle = std::thread::spawn(move || self.client_handler().unwrap());
+        let _span = info_span!("client_handler_thread");
+        let handle = std::thread::spawn(move || {
+            let _entered = _span.entered();
+            self.client_handler().unwrap();
+        });
 
         while running.load(Ordering::Relaxed) {
             if handle.is_finished() {
@@ -274,6 +282,6 @@ impl FranzServer {
             std::thread::sleep(Duration::from_secs(2));
         }
 
-        info!("shutting down...")
+        info!("shutting down...");
     }
 }

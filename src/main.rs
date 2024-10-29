@@ -5,6 +5,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
 };
+use tracing_opentelemetry::OpenTelemetryLayer;
 
 use opentelemetry::trace::{Tracer, TracerProvider as _};
 use opentelemetry_sdk::trace::TracerProvider;
@@ -34,19 +35,19 @@ fn main() {
     let tracer = provider.tracer("readme_example");
 
     // Create a tracing layer with the configured tracer
-    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+    // let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+    let telemetry = OpenTelemetryLayer::new(tracer);
 
     // Use the tracing subscriber `Registry`, or any other subscriber
     // that impls `LookupSpan`
     let subscriber = Registry::default().with(telemetry);
 
-    // Trace executed code
-    tracing::subscriber::set_global_default(subscriber).expect("to work");
-    // Spans will be sent to the configured OpenTelemetry exporter
-
-    error!("This event will be logged in the root span.");
-
     // tracing_subscriber::fmt::init();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+    // Spans will be sent to the configured OpenTelemetry exporter
+    let root = span!(tracing::Level::TRACE, "app_start", work_units = 2);
+    let _enter = root.enter();
+
     let args = Args::parse();
     let server = server::FranzServer::new(args.path, args.bind_ip, args.port);
     server.run();

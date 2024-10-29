@@ -6,6 +6,12 @@ use std::{
     path::PathBuf,
 };
 
+use opentelemetry::trace::{Tracer, TracerProvider as _};
+use opentelemetry_sdk::trace::TracerProvider;
+use tracing::{error, span};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::Registry;
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -20,7 +26,27 @@ struct Args {
 }
 
 fn main() {
-    tracing_subscriber::fmt::init();
+    // Create a new OpenTelemetry trace pipeline that prints to stdout
+    let provider = TracerProvider::builder()
+        .with_simple_exporter(opentelemetry_stdout::SpanExporter::default())
+        .build();
+
+    let tracer = provider.tracer("readme_example");
+
+    // Create a tracing layer with the configured tracer
+    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    // Use the tracing subscriber `Registry`, or any other subscriber
+    // that impls `LookupSpan`
+    let subscriber = Registry::default().with(telemetry);
+
+    // Trace executed code
+    tracing::subscriber::set_global_default(subscriber).expect("to work");
+    // Spans will be sent to the configured OpenTelemetry exporter
+
+    error!("This event will be logged in the root span.");
+
+    // tracing_subscriber::fmt::init();
     let args = Args::parse();
     let server = server::FranzServer::new(args.path, args.bind_ip, args.port);
     server.run();

@@ -1,5 +1,8 @@
 use disk_mpmc::manager::DataPagesManager;
 use disk_mpmc::{GenReceiver, Receiver, Sender};
+use figlet_rs::FIGfont;
+use nu_ansi_term::Color::{self, Red};
+use nu_ansi_term::Style;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
@@ -259,6 +262,12 @@ impl FranzServer {
     }
 
     pub fn run(mut self) {
+        let standard_font = FIGfont::standard().unwrap();
+        let style = Style::new().blink().bold().fg(Color::Cyan);
+        let figure = standard_font.convert("Franz");
+        assert!(figure.is_some());
+
+        println!("{}", style.paint(figure.unwrap().to_string()));
         info!(%self.sock_addr, "starting franz server:");
 
         let running = self.running.clone();

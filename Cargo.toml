@@ -16,9 +16,12 @@ license = "MIT"
 clap = { version = "4.5.8", features = ["derive", "string"] }
 ctrlc = { version = "3.4.4", features = ["termination"] }
 disk-mpmc = "0.4.2"
+figlet-rs = "0.1.5"
+nu-ansi-term = "0.50.1"
 num = "0.4.3"
 num-derive = "0.4.2"
 num-traits = "0.2.19"
+serde = { version = "1.0.214", features = ["derive"] }
 thiserror = "1.0.63"
 tokio-scoped = "0.2.0"
 tracing = "0.1.40"
